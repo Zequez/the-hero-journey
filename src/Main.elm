@@ -1,12 +1,14 @@
 module Main exposing (main)
 
 import Browser exposing (Document)
+import Browser.Dom
 import Dict exposing (Dict)
-import Html exposing (Html, button, div, input, main_, nav, text)
-import Html.Attributes exposing (class, classList, value)
-import Html.Events exposing (onClick, onInput, stopPropagationOn)
+import Html as H exposing (Html, button, div, input, main_, nav, text)
+import Html.Attributes as Attr exposing (class, classList, value)
+import Html.Events as Ev exposing (onClick, onInput, stopPropagationOn)
 import Html.Lazy exposing (lazy, lazy2, lazy3, lazy4)
-import Json.Decode
+import Json.Decode as D
+import Json.Encode as E
 import Ports
 import Task exposing (Task)
 import Time exposing (Posix)
@@ -26,6 +28,115 @@ type alias Model =
     , currentTime : Posix
     , currentZone : Time.Zone
     }
+
+
+type alias ModelBackup =
+    { logs : Logs
+    }
+
+
+modelEncode : Model -> E.Value
+modelEncode model =
+    E.object [ ( "logs", logsEncode model.logs ) ]
+
+
+modelDecode : D.Decoder ModelBackup
+modelDecode =
+    D.map ModelBackup
+        (D.field "logs" logsDecode)
+
+
+logsEncode : Logs -> E.Value
+logsEncode =
+    E.dict identity logEncode
+
+
+logsDecode : D.Decoder Logs
+logsDecode =
+    D.dict logDecode
+
+
+logEncode : Log -> E.Value
+logEncode log =
+    E.object
+        [ ( "id", E.string log.id )
+        , ( "title", E.string log.title )
+        , ( "category", categoryEncoder log.category )
+        , ( "createdAt", posixEncoder log.createdAt )
+        , ( "startAt", posixEncoder log.startAt )
+        , ( "endAt", posixEncoder log.endAt )
+        , ( "tags", E.list E.string log.tags )
+        , ( "details", E.string log.details )
+        ]
+
+
+logDecode : D.Decoder Log
+logDecode =
+    D.map8 Log
+        (D.field "id" D.string)
+        (D.field "title" D.string)
+        (D.field "category" categoryDecoder)
+        (D.field "createdAt" posixDecoder)
+        (D.field "startAt" posixDecoder)
+        (D.field "endAt" posixDecoder)
+        (D.field "tags" (D.list D.string))
+        (D.field "details" D.string)
+
+
+categoryEncoder : Category -> E.Value
+categoryEncoder category =
+    E.string
+        (case category of
+            SelfCare ->
+                "SelfCare"
+
+            Recreative ->
+                "Recreative"
+
+            Creative ->
+                "Creative"
+
+            SelfGrowth ->
+                "SelfGrowth"
+
+            Uncategorized ->
+                "Uncategorized"
+        )
+
+
+categoryDecoder : D.Decoder Category
+categoryDecoder =
+    D.string
+        |> D.andThen
+            (\str ->
+                D.succeed
+                    (case str of
+                        "SelfCare" ->
+                            SelfCare
+
+                        "Recreative" ->
+                            Recreative
+
+                        "Creative" ->
+                            Creative
+
+                        "SelfGrowth" ->
+                            SelfGrowth
+
+                        _ ->
+                            Uncategorized
+                    )
+            )
+
+
+posixEncoder : Posix -> E.Value
+posixEncoder time =
+    E.int (Time.posixToMillis time)
+
+
+posixDecoder : D.Decoder Posix
+posixDecoder =
+    D.int |> D.andThen (\millis -> D.succeed (Time.millisToPosix millis))
 
 
 type alias Logs =
@@ -71,7 +182,7 @@ type Category
     | Recreative
     | Creative
     | SelfGrowth
-    | UnCategorized
+    | Uncategorized
 
 
 type Msg
@@ -80,6 +191,8 @@ type Msg
     | ClickOnFreeSpace
     | ClickOnLog LogID
     | InputTitle String
+    | InputTitleKeyDown Int
+    | ClickDelete
     | Noop
 
 
@@ -97,25 +210,50 @@ update msg model =
                 newLog =
                     createNewLog model
             in
-            ( { model
+            { model
                 | logs = model.logs |> Dict.insert newLog.id newLog
-              }
-            , Ports.backupToLocalStorage "Potato"
-            )
+            }
+                |> andBackupModel
 
         ( ClickOnFreeSpace, Edit _ ) ->
-            ( { model | mode = Scrolling }, Cmd.none )
+            { model | mode = Scrolling } |> andBackupModel
 
         ( ClickOnLog logID, Scrolling ) ->
-            ( { model | mode = Edit logID }, Cmd.none )
+            ( { model | mode = Edit logID }
+            , Task.attempt (\_ -> Noop) (Browser.Dom.focus "editing-log")
+            )
 
         ( InputTitle text, Edit logID ) ->
             ( model |> updateLog logID (\l -> { l | title = text })
             , Cmd.none
             )
 
+        ( InputTitleKeyDown key, Edit _ ) ->
+            if key == 13 then
+                { model | mode = Scrolling }
+                    |> andBackupModel
+
+            else
+                ( model, Cmd.none )
+
+        ( ClickDelete, Edit logID ) ->
+            { model
+                | logs = model.logs |> Dict.remove logID
+                , mode = Scrolling
+            }
+                |> andBackupModel
+
         ( _, _ ) ->
             ( model, Cmd.none )
+
+
+andBackupModel : Model -> ( Model, Cmd Msg )
+andBackupModel model =
+    ( model, Ports.backupToLocalStorage (E.encode 0 (modelEncode model)) )
+
+
+
+-- restoreModel : Model ->
 
 
 updateLog : LogID -> (Log -> Log) -> Model -> Model
@@ -127,7 +265,7 @@ createNewLog : Model -> Log
 createNewLog { logs, currentTime } =
     { id = newID logs
     , title = "arsars"
-    , category = UnCategorized
+    , category = Uncategorized
     , createdAt = currentTime
     , startAt = currentTime
     , endAt =
@@ -140,9 +278,18 @@ createNewLog { logs, currentTime } =
     }
 
 
-init : ( Model, Cmd Msg )
-init =
-    ( { logs = Dict.fromList []
+init : D.Value -> ( Model, Cmd Msg )
+init localStorageData =
+    let
+        initialLogs =
+            case D.decodeValue modelDecode localStorageData of
+                Ok modelBackup ->
+                    modelBackup.logs
+
+                Err errorMsg ->
+                    Debug.log (D.errorToString errorMsg) (Dict.fromList [])
+    in
+    ( { logs = initialLogs
       , mode = Scrolling
       , currentTime = Time.millisToPosix 0
       , currentZone = Time.utc
@@ -192,10 +339,15 @@ viewLog log mode =
                 viewLogSimple log
 
 
-onClickUnpropagated : msg -> Html.Attribute msg
+onClickUnpropagated : msg -> H.Attribute msg
 onClickUnpropagated msg =
     stopPropagationOn "click"
-        (Json.Decode.map (\m -> ( m, True )) (Json.Decode.succeed msg))
+        (D.map (\m -> ( m, True )) (D.succeed msg))
+
+
+onKeyDown : (Int -> msg) -> H.Attribute msg
+onKeyDown tagger =
+    Ev.on "keydown" (D.map tagger Ev.keyCode)
 
 
 viewLogSimple : Log -> Html Msg
@@ -217,9 +369,15 @@ viewLogEdit log =
         [ div [ c "log-box", onClickUnpropagated Noop ]
             [ input
                 [ value log.title
+                , Attr.id "editing-log"
                 , onInput InputTitle
+                , onKeyDown InputTitleKeyDown
                 ]
                 []
+            , button
+                [ onClick ClickDelete
+                ]
+                [ text "X" ]
             ]
         ]
 
@@ -229,10 +387,10 @@ subscriptions model =
     Time.every 1000 TickTime
 
 
-main : Program () Model Msg
+main : Program D.Value Model Msg
 main =
     Browser.document
-        { init = \flags -> init
+        { init = \localStorageData -> init localStorageData
         , view = view
         , update = update
         , subscriptions = subscriptions
