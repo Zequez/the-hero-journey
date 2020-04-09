@@ -1,0 +1,60 @@
+:root {
+  --p: 16px;
+  --lh: 24px;
+  --radius: 4px;
+
+  --color-primary: darkslateblue;
+  --color-secondary: sienna;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, div, span {
+	margin: 0;
+	padding: 0;
+	border: 0;
+	font-size: 100%;
+	font: inherit;
+  vertical-align: baseline;
+}
+
+html, body, .container {
+  height: 100%;
+}
+
+body {
+  line-height: var(--lh);
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  background-color: #fafafa;
+}
+
+.container {
+  display: flex;
+  flex-direction: column-reverse;
+}
+
+.main {
+  flex-grow: 1;
+}
+
+.nav {
+  height: calc(var(--lh) + var(--p) * 2);
+  background: var(--color-primary);
+}
+
+.logs {
+
+}
+
+.log {
+  padding: 1px calc(var(--p) * 6) 1px calc(var(--p) * 3);
+}
+
+.log-box {
+  padding: calc(var(--p) / 2);
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.05);
+  border-radius: var(--radius);
+  background: rgba(0,0,0,0.1);
+}
