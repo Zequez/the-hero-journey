@@ -22,6 +22,15 @@ cx =
     classList
 
 
+
+-- ████████╗██╗   ██╗██████╗ ███████╗███████╗
+-- ╚══██╔══╝╚██╗ ██╔╝██╔══██╗██╔════╝██╔════╝
+--    ██║    ╚████╔╝ ██████╔╝█████╗  ███████╗
+--    ██║     ╚██╔╝  ██╔═══╝ ██╔══╝  ╚════██║
+--    ██║      ██║   ██║     ███████╗███████║
+--    ╚═╝      ╚═╝   ╚═╝     ╚══════╝╚══════╝
+
+
 type alias Model =
     { logs : Logs
     , mode : Mode
@@ -33,6 +42,61 @@ type alias Model =
 type alias ModelBackup =
     { logs : Logs
     }
+
+
+type alias Logs =
+    Dict String Log
+
+
+type Mode
+    = Scrolling
+    | Edit LogID
+
+
+type alias LogID =
+    String
+
+
+type alias Log =
+    { id : LogID
+    , title : String
+    , category : Category
+    , createdAt : Posix
+    , startAt : Posix
+    , endAt : Posix
+    , tags : List String
+    , details : String
+    }
+
+
+newID : Logs -> LogID
+newID logs =
+    String.fromInt
+        (1
+            + (Dict.values logs
+                |> List.map .id
+                |> List.map (\str -> Maybe.withDefault 0 (String.toInt str))
+                |> List.maximum
+                |> Maybe.withDefault 0
+              )
+        )
+
+
+type Category
+    = SelfCare
+    | Recreative
+    | Creative
+    | SelfGrowth
+    | Uncategorized
+
+
+
+-- ███████╗███╗   ██╗ ██████╗ ██████╗ ██████╗ ███████╗██████╗ ███████╗
+-- ██╔════╝████╗  ██║██╔════╝██╔═══██╗██╔══██╗██╔════╝██╔══██╗██╔════╝
+-- █████╗  ██╔██╗ ██║██║     ██║   ██║██║  ██║█████╗  ██████╔╝███████╗
+-- ██╔══╝  ██║╚██╗██║██║     ██║   ██║██║  ██║██╔══╝  ██╔══██╗╚════██║
+-- ███████╗██║ ╚████║╚██████╗╚██████╔╝██████╔╝███████╗██║  ██║███████║
+-- ╚══════╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝╚══════╝
 
 
 modelEncode : Model -> E.Value
@@ -139,50 +203,13 @@ posixDecoder =
     D.int |> D.andThen (\millis -> D.succeed (Time.millisToPosix millis))
 
 
-type alias Logs =
-    Dict String Log
 
-
-type Mode
-    = Scrolling
-    | Edit LogID
-
-
-type alias LogID =
-    String
-
-
-type alias Log =
-    { id : LogID
-    , title : String
-    , category : Category
-    , createdAt : Posix
-    , startAt : Posix
-    , endAt : Posix
-    , tags : List String
-    , details : String
-    }
-
-
-newID : Logs -> LogID
-newID logs =
-    String.fromInt
-        (1
-            + (Dict.values logs
-                |> List.map .id
-                |> List.map (\str -> Maybe.withDefault 0 (String.toInt str))
-                |> List.maximum
-                |> Maybe.withDefault 0
-              )
-        )
-
-
-type Category
-    = SelfCare
-    | Recreative
-    | Creative
-    | SelfGrowth
-    | Uncategorized
+-- ██╗   ██╗██████╗ ██████╗  █████╗ ████████╗███████╗
+-- ██║   ██║██╔══██╗██╔══██╗██╔══██╗╚══██╔══╝██╔════╝
+-- ██║   ██║██████╔╝██║  ██║███████║   ██║   █████╗
+-- ██║   ██║██╔═══╝ ██║  ██║██╔══██║   ██║   ██╔══╝
+-- ╚██████╔╝██║     ██████╔╝██║  ██║   ██║   ███████╗
+--  ╚═════╝ ╚═╝     ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝
 
 
 type Msg
@@ -252,10 +279,6 @@ andBackupModel model =
     ( model, Ports.backupToLocalStorage (E.encode 0 (modelEncode model)) )
 
 
-
--- restoreModel : Model ->
-
-
 updateLog : LogID -> (Log -> Log) -> Model -> Model
 updateLog logID updateFun model =
     { model | logs = model.logs |> Dict.update logID (Maybe.map updateFun) }
@@ -278,24 +301,13 @@ createNewLog { logs, currentTime } =
     }
 
 
-init : D.Value -> ( Model, Cmd Msg )
-init localStorageData =
-    let
-        initialLogs =
-            case D.decodeValue modelDecode localStorageData of
-                Ok modelBackup ->
-                    modelBackup.logs
 
-                Err errorMsg ->
-                    Debug.log (D.errorToString errorMsg) (Dict.fromList [])
-    in
-    ( { logs = initialLogs
-      , mode = Scrolling
-      , currentTime = Time.millisToPosix 0
-      , currentZone = Time.utc
-      }
-    , Task.perform AdjustTimeZone Time.here
-    )
+-- ██╗   ██╗██╗███████╗██╗    ██╗███████╗
+-- ██║   ██║██║██╔════╝██║    ██║██╔════╝
+-- ██║   ██║██║█████╗  ██║ █╗ ██║███████╗
+-- ╚██╗ ██╔╝██║██╔══╝  ██║███╗██║╚════██║
+--  ╚████╔╝ ██║███████╗╚███╔███╔╝███████║
+--   ╚═══╝  ╚═╝╚══════╝ ╚══╝╚══╝ ╚══════╝
 
 
 view : Model -> Document Msg
@@ -380,6 +392,35 @@ viewLogEdit log =
                 [ text "X" ]
             ]
         ]
+
+
+
+-- ██╗███╗   ██╗██╗████████╗
+-- ██║████╗  ██║██║╚══██╔══╝
+-- ██║██╔██╗ ██║██║   ██║
+-- ██║██║╚██╗██║██║   ██║
+-- ██║██║ ╚████║██║   ██║
+-- ╚═╝╚═╝  ╚═══╝╚═╝   ╚═╝
+
+
+init : D.Value -> ( Model, Cmd Msg )
+init localStorageData =
+    let
+        initialLogs =
+            case D.decodeValue modelDecode localStorageData of
+                Ok modelBackup ->
+                    modelBackup.logs
+
+                Err errorMsg ->
+                    Debug.log (D.errorToString errorMsg) (Dict.fromList [])
+    in
+    ( { logs = initialLogs
+      , mode = Scrolling
+      , currentTime = Time.millisToPosix 0
+      , currentZone = Time.utc
+      }
+    , Task.perform AdjustTimeZone Time.here
+    )
 
 
 subscriptions : Model -> Sub Msg
