@@ -4,4 +4,4 @@
 
 A life timeline logging and journaling app.
 
-Unfinished work.
+Work in progress.
