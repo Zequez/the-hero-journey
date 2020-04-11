@@ -170,7 +170,7 @@ detectUnnecesaryEmpty log1 log2 =
 detectAllOverridable : List Log -> Bool
 detectAllOverridable logsList =
     logsList
-        |> List.all (\log -> log.category == Empty || (log.category == Uncategorized && log.title == ""))
+        |> List.all (\log -> log.title == "")
 
 
 sorted : Logs -> List Log
@@ -212,10 +212,10 @@ partitionWith2 logs from to =
             sorted logs
 
         ( top, rest ) =
-            partition sortedList from
+            partition sortedList from True
 
         ( middlePlus, bottom ) =
-            partition rest to
+            partition rest to False
 
         reverseMiddle =
             List.reverse middlePlus
@@ -226,11 +226,13 @@ partitionWith2 logs from to =
         middle =
             List.reverse (Maybe.withDefault [] (List.tail reverseMiddle))
 
-        -- _ =
-        --     [ Debug.log "Top: " top
-        --     , Debug.log "Middle: " middle
-        --     , Debug.log "Bottom: " bottom
-        --     ]
+        result =
+            Debug.log "partitionWith2 result"
+                { top = List.head (List.reverse top)
+                , middle = middle
+                , lastMiddle = lastMiddle
+                , bottom = List.head bottom
+                }
     in
     { top = List.head (List.reverse top)
     , middle = middle
@@ -239,10 +241,17 @@ partitionWith2 logs from to =
     }
 
 
-partition : List Log -> Posix -> ( List Log, List Log )
-partition logs at =
+partition : List Log -> Posix -> Bool -> ( List Log, List Log )
+partition logs at inclusive =
     logs
-        |> List.partition (\log -> PXE.diff log.at at > 0)
+        |> List.partition
+            (\log ->
+                if inclusive then
+                    PXE.diff log.at at > 0
+
+                else
+                    PXE.diff log.at at >= 0
+            )
 
 
 addNewLogOnRange : Posix -> Posix -> Time.Posix -> Logs -> Logs
@@ -280,6 +289,9 @@ addNewLogOnRange start end currentTime logs =
 
             middleIsOverridable =
                 detectAllOverridable part.middle
+
+            _ =
+                Debug.log "Middle overridable?" middleIsOverridable
         in
         if middleIsOverridable then
             (case part.lastMiddle of

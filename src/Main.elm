@@ -374,7 +374,7 @@ view model =
             [ nav [ c "nav" ] []
             , main_ [ c "main" ]
                 -- [ lazy viewLogsList model
-                [ viewViewport
+                [ lazy4 viewViewport
                     model.viewport
                     model.newLogDrag
                     model.currentZone
@@ -406,10 +406,7 @@ viewViewport viewport newLogDrag timeZone logs =
         , onSplitProgress (newLogDrag /= DragInactive) Splitting
         , onSplitEnd (newLogDrag /= DragInactive) Splitting
         ]
-        [ div
-            [ c "logs"
-            , style "height" (px (VP.fullHeight viewport))
-            ]
+        [ div [ c "logs", style "height" (px (VP.fullHeight viewport)) ]
             [ case newLogDrag of
                 Dragging ( start, end ) ->
                     viewLogGhost viewport start end
@@ -455,10 +452,15 @@ viewLogsList viewport zone logs =
 
 viewLogPaint : Viewport -> Time.Zone -> Log -> Log -> Html Msg
 viewLogPaint viewport zone log nextLog =
+    let
+        timespan =
+            PXE.diff log.at nextLog.at
+    in
     div
         [ c ("log log--" ++ Logs.categoryToSlug log.category)
         , style "top" <| px (VP.posixToPx viewport log.at)
-        , style "height" <| px (VP.millisToPx viewport (PXE.diff log.at nextLog.at))
+        , style "height" <| px (VP.millisToPx viewport timespan)
+        , viewLogBoxSizeClass timespan
         ]
         [ viewLogTime zone log.at
         , viewLogBox log
@@ -473,6 +475,24 @@ viewLogPaint viewport zone log nextLog =
         -- ]
         -- []
         ]
+
+
+viewLogBoxSizeClass : Int -> H.Attribute Msg
+viewLogBoxSizeClass timespan =
+    if timespan < (1000 * 60 * 10) then
+        -- 10min
+        c "log--10min log--30min log--60min"
+
+    else if timespan < (1000 * 60 * 30) then
+        -- 30min
+        c "log--30min log--60min"
+
+    else if timespan < (1000 * 60 * 60) then
+        -- 1 hour
+        c "log--60min"
+
+    else
+        c ""
 
 
 viewLogTime : Time.Zone -> Posix -> Html Msg
@@ -506,14 +526,15 @@ viewLogBox log =
                 )
             , div
                 [ c "log__title" ]
-                [ div
+                [ input
                     [ c "log__titleInput"
                     , noPropagation "mousedown"
-                    , Attr.attribute "contenteditable" "true"
                     , onInput (InputTitle log.id)
+                    , value log.title
                     ]
-                    [ text log.title
-                    ]
+                    []
+
+                -- , div [] [ text log.id ]
                 ]
             , button
                 [ c "log__delete"

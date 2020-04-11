@@ -1,7 +1,10 @@
 import "./Main.css";
 import { Elm } from "./Main.elm";
 import * as ports from "./ports.js";
+import * as ElmDebugger from "elm-debug-transformer";
 // import * as serviceWorker from "./serviceWorker";
+
+ElmDebugger.register();
 
 const app = Elm.Main.init({
   flags: JSON.parse(localStorage.getItem("_the_hero_journey_") || "{}"),
