@@ -4,15 +4,16 @@ module Logs exposing
     , LogID
     , Logs
     , add
+    , addNewLogOnRange
     , buildLog
     , categoryToSlug
     , consolidateEmpty
     , decoder
     , detectAllOverridable
     , encoder
-    , findTopBottomMiddle
     , newID
     , nextID
+    , partitionWith2
     , remove
     , removeMany
     , sorted
@@ -69,27 +70,23 @@ type Category
 -- in any case we evaluate the list of logs to be less than 2
 -- we return this to satisfy the compiler.
 -- However, we should think about changing the datastructure.
-
-
-impossibleStartLog : Log
-impossibleStartLog =
-    { id = "-1"
-    , title = ""
-    , category = Empty
-    , createdAt = Time.millisToPosix 0
-    , at = Time.millisToPosix 0
-    , tags = []
-    , details = ""
-    }
-
-
-impossibleEndLog : Log
-impossibleEndLog =
-    { impossibleStartLog
-        | id = "999999999"
-        , createdAt = Time.millisToPosix (1000 * 60 * 60 * 24 * 365 * 1000)
-        , at = Time.millisToPosix (1000 * 60 * 60 * 24 * 365 * 1000)
-    }
+-- impossibleStartLog : Log
+-- impossibleStartLog =
+--     { id = "-1"
+--     , title = ""
+--     , category = Empty
+--     , createdAt = Time.millisToPosix 0
+--     , at = Time.millisToPosix 0
+--     , tags = []
+--     , details = ""
+--     }
+-- impossibleEndLog : Log
+-- impossibleEndLog =
+--     { impossibleStartLog
+--         | id = "999999999"
+--         , createdAt = Time.millisToPosix (1000 * 60 * 60 * 24 * 365 * 1000)
+--         , at = Time.millisToPosix (1000 * 60 * 60 * 24 * 365 * 1000)
+--     }
 
 
 newID : Logs -> LogID
@@ -131,12 +128,12 @@ removeMany logsList logs =
         |> List.foldl remove logs
 
 
-buildLog : LogID -> Posix -> Posix -> Log
-buildLog logID createdAt posixAt =
+buildLog : LogID -> Category -> Posix -> Posix -> Log
+buildLog logID category createdAt posixAt =
     -- in
     { id = logID
     , title = ""
-    , category = Uncategorized
+    , category = category
     , createdAt = createdAt
     , at = posixAt
     , tags = []
@@ -200,8 +197,16 @@ sortFun log =
 --         [] -> impossibleFirstLog
 
 
-findTopBottomMiddle : Logs -> Posix -> Posix -> ( Log, List Log, Log )
-findTopBottomMiddle logs from to =
+type alias PartitionResult =
+    { top : Maybe Log
+    , middle : List Log
+    , lastMiddle : Maybe Log
+    , bottom : Maybe Log
+    }
+
+
+partitionWith2 : Logs -> Posix -> Posix -> PartitionResult
+partitionWith2 logs from to =
     let
         sortedList =
             sorted logs
@@ -209,8 +214,17 @@ findTopBottomMiddle logs from to =
         ( top, rest ) =
             partition sortedList from
 
-        ( middle, bottom ) =
+        ( middlePlus, bottom ) =
             partition rest to
+
+        reverseMiddle =
+            List.reverse middlePlus
+
+        lastMiddle =
+            List.head reverseMiddle
+
+        middle =
+            List.reverse (Maybe.withDefault [] (List.tail reverseMiddle))
 
         -- _ =
         --     [ Debug.log "Top: " top
@@ -218,16 +232,74 @@ findTopBottomMiddle logs from to =
         --     , Debug.log "Bottom: " bottom
         --     ]
     in
-    ( Maybe.withDefault impossibleStartLog (List.head (List.reverse top))
-    , middle
-    , Maybe.withDefault impossibleEndLog (List.head bottom)
-    )
+    { top = List.head (List.reverse top)
+    , middle = middle
+    , lastMiddle = lastMiddle
+    , bottom = List.head bottom
+    }
 
 
 partition : List Log -> Posix -> ( List Log, List Log )
 partition logs at =
     logs
         |> List.partition (\log -> PXE.diff log.at at > 0)
+
+
+addNewLogOnRange : Posix -> Posix -> Time.Posix -> Logs -> Logs
+addNewLogOnRange start end currentTime logs =
+    if PXE.diff start end == 0 then
+        let
+            part =
+                partitionWith2 logs start end
+        in
+        case ( part.top, part.bottom ) of
+            ( Just top, Just bottom ) ->
+                if top.category == Empty then
+                    logs
+                        |> update top.id (\l -> { l | category = Uncategorized })
+
+                else
+                    logs
+
+            _ ->
+                logs
+
+    else
+        let
+            ( top, bottom ) =
+                PXE.sort2 ( start, end )
+
+            part =
+                partitionWith2 logs top bottom
+
+            newLog1 =
+                buildLog (newID logs) Uncategorized currentTime top
+
+            newLog2 =
+                buildLog (nextID newLog1.id) Empty currentTime bottom
+
+            middleIsOverridable =
+                detectAllOverridable part.middle
+        in
+        if middleIsOverridable then
+            (case part.lastMiddle of
+                Just lastMiddle ->
+                    logs |> moveTo lastMiddle bottom
+
+                Nothing ->
+                    logs |> add newLog2
+            )
+                |> removeMany part.middle
+                |> add newLog1
+                |> consolidateEmpty
+
+        else
+            logs
+
+
+moveTo : Log -> Posix -> Logs -> Logs
+moveTo log posix logs =
+    update log.id (\l -> { l | at = posix }) logs
 
 
 

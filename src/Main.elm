@@ -135,7 +135,8 @@ type Msg
     | OnScroll Int
     | Splitting SplittingMsg Int
     | ClickOnLog LogID
-    | InputTitle String
+    | InputTitle LogID String
+    | SetCategory LogID Logs.Category
     | InputTitleKeyDown Int
     | DeleteLog LogID
     | Noop
@@ -177,22 +178,25 @@ update msg model =
 
                 --Debug.log "Split msg " posY
             in
-            case splitMsg of
-                SplitStart ->
+            case ( splitMsg, model.newLogDrag ) of
+                ( SplitStart, DragInactive ) ->
                     model
                         |> updateDragStatus posY
                         |> andCmd Cmd.none
 
-                SplitProgress ->
+                ( SplitProgress, Dragging _ ) ->
                     model
                         |> updateDragStatus posY
                         |> andCmd Cmd.none
 
-                SplitEnd ->
+                ( SplitEnd, Dragging _ ) ->
                     model
                         |> addLogFromDrag
                         |> updateDragStatus -1
                         |> andBackupModel
+
+                ( _, _ ) ->
+                    ( model, Cmd.none )
 
         -- ( ClickOnFreeSpace, Edit _ ) ->
         --     model
@@ -203,13 +207,17 @@ update msg model =
             , Task.attempt (\_ -> Noop) (Dom.focus "editing-log")
             )
 
-        ( InputTitle text, Edit logID ) ->
-            ( model
+        ( InputTitle logID text, _ ) ->
+            model
                 |> updateLog logID (\l -> { l | title = text })
-            , Cmd.none
-            )
+                |> andBackupModel
 
-        ( InputTitleKeyDown key, Edit _ ) ->
+        ( SetCategory logID category, _ ) ->
+            model
+                |> updateLog logID (\l -> { l | category = category })
+                |> andBackupModel
+
+        ( InputTitleKeyDown key, _ ) ->
             if key == 13 then
                 model
                     |> updateMode Scrolling
@@ -274,19 +282,12 @@ snapBy snap num =
 
 
 
--- findLogAt : Logs -> Posix -> Log
--- findLogAt logs posix =
---     sortedLogs logs
---         |>
-
-
-snapToLogBoundary : Posix -> Posix -> Posix -> Posix
-snapToLogBoundary upperBoundary lowerBoundary posix =
-    if PXE.diff upperBoundary posix > PXE.diff lowerBoundary posix then
-        lowerBoundary
-
-    else
-        upperBoundary
+-- snapToLogBoundary : Posix -> Posix -> Posix -> Posix
+-- snapToLogBoundary upperBoundary lowerBoundary posix =
+--     if PXE.diff upperBoundary posix > PXE.diff lowerBoundary posix then
+--         lowerBoundary
+--     else
+--         upperBoundary
 
 
 consolidateEmptyLogs : Model -> Model
@@ -346,37 +347,11 @@ addLogFromDrag : Model -> Model
 addLogFromDrag model =
     case model.newLogDrag of
         Dragging ( start, end ) ->
-            if PXE.diff start end == 0 then
-                model
-
-            else
-                let
-                    ( top, bottom ) =
-                        PXE.sort2 ( start, end )
-
-                    ( topTop, middle, bottomBottom ) =
-                        Logs.findTopBottomMiddle model.logs top bottom
-
-                    newLog1 =
-                        Logs.buildLog (newID model.logs) model.currentTime top
-
-                    newLog2 =
-                        Logs.buildLog (Logs.nextID newLog1.id) model.currentTime bottom
-
-                    middleIsOverridable =
-                        Logs.detectAllOverridable middle
-                in
-                if middleIsOverridable then
-                    model
-                        |> updateLogs
-                            (model.logs
-                                |> Logs.removeMany middle
-                                |> Logs.add newLog1
-                                |> Logs.add newLog2
-                            )
-
-                else
-                    model
+            { model
+                | logs =
+                    model.logs
+                        |> Logs.addNewLogOnRange start end model.currentTime
+            }
 
         DragInactive ->
             model
@@ -425,6 +400,7 @@ viewViewport viewport newLogDrag timeZone logs =
     div
         [ c "viewport"
         , id "viewport"
+        , cx [ ( "viewport--dragging", newLogDrag /= DragInactive ) ]
         , onScroll OnScroll
         , onSplitStart Splitting
         , onSplitProgress (newLogDrag /= DragInactive) Splitting
@@ -440,7 +416,7 @@ viewViewport viewport newLogDrag timeZone logs =
 
                 DragInactive ->
                     div [] []
-            , viewLogsList viewport timeZone logs
+            , lazy3 viewLogsList viewport timeZone logs
             ]
         ]
 
@@ -452,7 +428,7 @@ viewLogGhost viewport start end =
             PXE.sort2 ( start, end )
     in
     div
-        [ c "log log__Ghost"
+        [ c "log log--Ghost"
         , style "top" <| px (VP.posixToPx viewport top)
         , style "height" <| px (VP.millisToPx viewport (PXE.diff top bottom))
         ]
@@ -469,7 +445,7 @@ viewLogsList viewport zone logs =
         (case allLogs of
             firstLog :: restOfLogs ->
                 allLogs
-                    |> List.map (\log -> viewLogPaint viewport log)
+                    |> List.map (\log -> viewLogPaint viewport zone log)
                     |> List.map2 (\next vlog -> vlog next) restOfLogs
 
             _ ->
@@ -477,24 +453,84 @@ viewLogsList viewport zone logs =
         )
 
 
-viewLogPaint : Viewport -> Log -> Log -> Html Msg
-viewLogPaint viewport log nextLog =
+viewLogPaint : Viewport -> Time.Zone -> Log -> Log -> Html Msg
+viewLogPaint viewport zone log nextLog =
     div
-        [ c ("log log__" ++ Logs.categoryToSlug log.category)
+        [ c ("log log--" ++ Logs.categoryToSlug log.category)
         , style "top" <| px (VP.posixToPx viewport log.at)
         , style "height" <| px (VP.millisToPx viewport (PXE.diff log.at nextLog.at))
         ]
-        [ div
-            [ c "log__box"
+        [ viewLogTime zone log.at
+        , viewLogBox log
 
-            -- , if log.category == Logs.Empty then
-            -- Ev.onMouseDown (TouchEmptyLog log.id)
-            -- , onSplitStart Splitting
-            --   else
-            --     onClickUnpropagated (DeleteLog log.id)
-            ]
-            []
+        -- div
+        -- [ c "log__box"
+        -- -- , if log.category == Logs.Empty then
+        -- -- Ev.onMouseDown (TouchEmptyLog log.id)
+        -- -- , onSplitStart Splitting
+        -- --   else
+        -- --     onClickUnpropagated (DeleteLog log.id)
+        -- ]
+        -- []
         ]
+
+
+viewLogTime : Time.Zone -> Posix -> Html Msg
+viewLogTime zone posix =
+    div [ c "log__time" ] [ text (PXE.toNormalTime zone posix) ]
+
+
+
+-- viewLogBoxEmpty : Log -> Html Msg
+-- viewLogBoxEmpty log =
+--     div [c "log__box"] []
+
+
+viewLogBox : Log -> Html Msg
+viewLogBox log =
+    if log.category == Logs.Empty then
+        div [] []
+
+    else
+        div [ c "log__box" ]
+            [ div [ c "log__category", noPropagation "mousedown" ]
+                (if log.category == Logs.Uncategorized then
+                    [ viewLogBoxCatSelect Logs.SelfCare (SetCategory log.id)
+                    , viewLogBoxCatSelect Logs.Recreative (SetCategory log.id)
+                    , viewLogBoxCatSelect Logs.Creative (SetCategory log.id)
+                    , viewLogBoxCatSelect Logs.SelfGrowth (SetCategory log.id)
+                    ]
+
+                 else
+                    [ viewLogBoxCatSelect Logs.Uncategorized (SetCategory log.id) ]
+                )
+            , div
+                [ c "log__title" ]
+                [ div
+                    [ c "log__titleInput"
+                    , noPropagation "mousedown"
+                    , Attr.attribute "contenteditable" "true"
+                    , onInput (InputTitle log.id)
+                    ]
+                    [ text log.title
+                    ]
+                ]
+            , button
+                [ c "log__delete"
+                , noPropagation "mousedown"
+                , onClick (DeleteLog log.id)
+                ]
+                [ text "×" ]
+            ]
+
+
+viewLogBoxCatSelect : Logs.Category -> (Logs.Category -> msg) -> Html msg
+viewLogBoxCatSelect category msg =
+    div
+        [ c ("log__categorySelect--" ++ Logs.categoryToSlug category)
+        , onClick (msg category)
+        ]
+        []
 
 
 viewDebug : Model -> Html Msg
@@ -661,6 +697,11 @@ onClickUnpropagated msg =
         (D.map (\m -> ( m, True )) (D.succeed msg))
 
 
+noPropagation : String -> H.Attribute Msg
+noPropagation event =
+    stopPropagationOn event (D.map (\m -> ( m, True )) (D.succeed Noop))
+
+
 onKeyDown : (Int -> msg) -> H.Attribute msg
 onKeyDown tagger =
     Ev.on "keydown" (D.map tagger Ev.keyCode)
@@ -669,7 +710,7 @@ onKeyDown tagger =
 onSplitStart : (SplittingMsg -> Int -> msg) -> H.Attribute msg
 onSplitStart msg =
     Ev.on "mousedown" <|
-        D.map (msg SplitProgress)
+        D.map (msg SplitStart)
             (fi "clientY" D.int)
 
 

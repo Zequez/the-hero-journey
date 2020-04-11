@@ -1,0 +1,198 @@
+$p: 16px
+$lh: 24px
+$radius: 4px
+
+$color-primary: darkslateblue
+$color-secondary: sienna
+
+$nav-height: $lh * 2 + $p * 2
+
+$color-text-primary: rgba(#000,.86)
+$color-text-greyed: rgba(#000,.50)
+$color-text-dim: rgba(#000, .25)
+
+$focus-shadow: inset 0 0 0 2px rgba($color-primary, 0.7)
+$hover-shadow: inset 0 0 0 2px rgba($color-primary, 0.2)
+
+*
+  box-sizing: border-box
+
+
+html, body, div, span
+  margin: 0
+  padding: 0
+  border: 0
+  font-size: 100%
+  vertical-align: baseline
+
+
+html, body, .container
+  height: 100%
+  font-size: 16px
+  color: $color-text-primary
+
+input, button, div
+  &:focus, &:active
+    outline: none
+
+body
+  line-height: var(--lh)
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif
+  background-color: #fafafa
+
+
+.container
+  display: flex
+  flex-direction: column-reverse
+
+
+.main
+  position: absolute
+  top: 0
+  left: 0
+  right: 0
+  bottom: $nav-height
+
+
+.debug
+  position: absolute
+  top: 100px
+  left: 0
+  z-index: 100
+  pointer-events: none
+  font-size: 24px
+  background: rgba(0,255, 0, 1)
+
+
+.nav
+  height: $nav-height
+  background: $color-primary
+
+
+.viewport
+  height: 100%
+  overflow-x: hidden
+
+
+  &--dragging
+    user-select: none
+
+
+.test
+  position: absolute
+  top: 500px
+  width: 100%
+  height: 100px
+  background: blue
+
+
+.logs
+  position: relative
+
+
+.log
+  position: absolute
+  top: 0
+  left: 0
+  width: 100%
+  padding: 1px $p*6 1px $p*3
+
+  &__time
+    position: absolute
+    top: -$lh / 2
+    left: 0
+    width: $p*2.5
+    text-align: right
+    font-size: 0.8rem
+    color: $color-text-dim
+
+
+  &__box
+    position: relative
+    display: flex
+    align-items: center
+    height: 100%
+    border-radius: $radius
+
+
+  &__category
+    display: flex
+    flex-direction: column
+    width: $lh * 2
+    height: 100%
+    cursor: pointer
+    div
+      flex: 1
+      &:first-child
+        border-top-left-radius: $radius
+      &:last-child
+        border-bottom-left-radius: $radius
+
+
+  &__title
+    flex-grow: 1
+    display: flex
+    align-items: center
+    height: 100%
+    border-radius: 0 $radius $radius 0
+    background: rgba(#000, 0.07)
+
+  &__titleInput
+    margin: 0 $p/2
+    padding: $p/2
+    border-radius: $radius
+    display: block
+    resize: none
+    width: 100%
+    border: 0
+    font-family: inherit
+    &:hover
+      box-shadow: $hover-shadow
+    &:focus
+      box-shadow: $focus-shadow
+
+
+
+
+  &__delete
+    position: absolute
+    right: 0
+    top: 0
+    width: $lh
+    height: $lh
+    max-height: 100%
+    padding: 0
+    border-bottom-left-radius: $radius
+    border-top-right-radius: $radius
+    border: solid 1px rgba(#000, 0.1)
+    border-right: 0
+    border-top: 0
+    background: transparent
+    cursor: pointer
+    &:hover, &:active, &:focus
+      background: rgba(#F00, 0.2)
+
+  &--edit .log__box
+    box-shadow: inset 0 0 0 1px rgba(#000,1)
+
+  /* Category specific styles */
+
+  $logs-colors: ("Ghost": #1165af,
+  "SelfCare": #964a39,
+  "Recreative": #509639,
+  "Creative": #397496,
+  "SelfGrowth": #96398e)
+
+  @each $name, $color in $logs-colors
+    &.log--#{$name}
+      .log__category
+        background-color: $color
+      .log__title
+        background-color: rgba($color, 0.25)
+    .log__categorySelect--#{$name}
+      background-color: $color
+  &--Ghost .log__box
+    background-color: rgba(#00F, 0.2)
+  &--Uncategorized
+  &--Empty .log__box
+    opacity: 0.25
