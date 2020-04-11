@@ -4,7 +4,7 @@ import * as ports from "./ports.js";
 // import * as serviceWorker from "./serviceWorker";
 
 const app = Elm.Main.init({
-  flags: JSON.parse(localStorage.getItem("_the_hero_journey_")),
+  flags: JSON.parse(localStorage.getItem("_the_hero_journey_") || "{}"),
   node: document.getElementById("root"),
 });
 

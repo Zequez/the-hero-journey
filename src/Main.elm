@@ -8,11 +8,19 @@ import Html.Attributes as Attr exposing (class, classList, id, style, value)
 import Html.Events as Ev exposing (onClick, onInput, stopPropagationOn)
 import Html.Lazy exposing (lazy, lazy2, lazy3, lazy4)
 import Json.Decode as D
-import Json.Decode.Pipeline as Dp
 import Json.Encode as E
+import Logs exposing (Log, LogID, Logs, newID)
+import Lorem
 import Ports
+import PosixExtra as PXE
 import Task exposing (Task)
 import Time exposing (Posix)
+import Viewport as VP exposing (Viewport)
+
+
+fi : String -> D.Decoder a -> D.Decoder a
+fi =
+    D.field
 
 
 c =
@@ -24,12 +32,12 @@ cx =
 
 
 
--- ████████╗██╗   ██╗██████╗ ███████╗███████╗
--- ╚══██╔══╝╚██╗ ██╔╝██╔══██╗██╔════╝██╔════╝
---    ██║    ╚████╔╝ ██████╔╝█████╗  ███████╗
---    ██║     ╚██╔╝  ██╔═══╝ ██╔══╝  ╚════██║
---    ██║      ██║   ██║     ███████╗███████║
---    ╚═╝      ╚═╝   ╚═╝     ╚══════╝╚══════╝
+------------------------------------ ████████╗██╗   ██╗██████╗ ███████╗███████╗
+------------------------------------ ╚══██╔══╝╚██╗ ██╔╝██╔══██╗██╔════╝██╔════╝
+------------------------------------    ██║    ╚████╔╝ ██████╔╝█████╗  ███████╗
+------------------------------------    ██║     ╚██╔╝  ██╔═══╝ ██╔══╝  ╚════██║
+------------------------------------    ██║      ██║   ██║     ███████╗███████║
+------------------------------------    ╚═╝      ╚═╝   ╚═╝     ╚══════╝╚══════╝
 
 
 type alias Model =
@@ -37,10 +45,15 @@ type alias Model =
     , mode : Mode
     , currentTime : Posix
     , currentZone : Time.Zone
-    , viewportPosition : Posix
-    , viewportHeight : Int
-    , viewportMillis : Int
+    , viewport : Viewport
+    , newLogDrag : DragStatus
+    , snapMillis : Int
     }
+
+
+type DragStatus
+    = DragInactive
+    | Dragging ( Posix, Posix )
 
 
 type alias ModelBackup =
@@ -48,59 +61,22 @@ type alias ModelBackup =
     }
 
 
-type alias Logs =
-    Dict String Log
-
-
 type Mode
     = Scrolling
     | Edit LogID
 
 
-type alias LogID =
-    String
 
-
-type alias Log =
-    { id : LogID
-    , title : String
-    , category : Category
-    , createdAt : Posix
-    , at : Posix
-    , tags : List String
-    , details : String
-    }
-
-
-newID : Logs -> LogID
-newID logs =
-    String.fromInt
-        (1
-            + (Dict.values logs
-                |> List.map .id
-                |> List.map (\str -> Maybe.withDefault 0 (String.toInt str))
-                |> List.maximum
-                |> Maybe.withDefault 0
-              )
-        )
-
-
-type Category
-    = SelfCare
-    | Recreative
-    | Creative
-    | SelfGrowth
-    | Uncategorized
-    | Empty
-
-
-
--- ██╗███╗   ██╗██╗████████╗
--- ██║████╗  ██║██║╚══██╔══╝
--- ██║██╔██╗ ██║██║   ██║
--- ██║██║╚██╗██║██║   ██║
--- ██║██║ ╚████║██║   ██║
--- ╚═╝╚═╝  ╚═══╝╚═╝   ╚═╝
+------------------------------------------------------ ██╗███╗   ██╗██╗████████╗
+------------------------------------------------------ ██║████╗  ██║██║╚══██╔══╝
+------------------------------------------------------ ██║██╔██╗ ██║██║   ██║
+------------------------------------------------------ ██║██║╚██╗██║██║   ██║
+------------------------------------------------------ ██║██║ ╚████║██║   ██║
+------------------------------------------------------ ╚═╝╚═╝  ╚═══╝╚═╝   ╚═╝
+-- type InitialData = {
+--     modelBackup: ModelBackup
+--     , viewportHeight:
+-- }
 
 
 init : D.Value -> ( Model, Cmd Msg )
@@ -118,43 +94,46 @@ init localStorageData =
       , mode = Scrolling
       , currentTime = Time.millisToPosix 0
       , currentZone = Time.utc
-      , viewportPosition = Time.millisToPosix 0
-      , viewportHeight = 900
-      , viewportMillis = 1000 * 60 * 60 * 24 -- 1 day
+      , viewport =
+            { firstDate = Time.millisToPosix 1586401200000 -- 2020-04-09
+            , lastDate = Time.millisToPosix 1586660400000 -- 2020-04-12
+            , visibleTimespan = 1000 * 60 * 60 * 24
+            , scroll = 0
+            , height = 986
+            }
+      , newLogDrag = DragInactive
+      , snapMillis = 1000 * 60 * 10 -- 10min
       }
-    , Cmd.batch
-        [ Task.perform AdjustTimeZone Time.here
-        , Task.perform TickTime Time.now
-        , Task.attempt
-            (\result ->
-                case result of
-                    Ok el ->
-                        ReadViewportHeight el
-
-                    _ ->
-                        Noop
-            )
-            (Dom.getElement "container")
-        ]
+    , Task.attempt (Result.withDefault Noop) initialTask
     )
 
 
+initialTask : Task Dom.Error Msg
+initialTask =
+    Dom.getElement "container"
+        |> Task.andThen
+            (\el ->
+                Task.map2
+                    (\zone posix -> InitializationTask ( el, zone, posix ))
+                    Time.here
+                    Time.now
+            )
 
--- unwrapResult: Result a b -> c -> c b -> c
--- unwrapResult
--- ██╗   ██╗██████╗ ██████╗  █████╗ ████████╗███████╗
--- ██║   ██║██╔══██╗██╔══██╗██╔══██╗╚══██╔══╝██╔════╝
--- ██║   ██║██████╔╝██║  ██║███████║   ██║   █████╗
--- ██║   ██║██╔═══╝ ██║  ██║██╔══██║   ██║   ██╔══╝
--- ╚██████╔╝██║     ██████╔╝██║  ██║   ██║   ███████╗
---  ╚═════╝ ╚═╝     ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝
+
+
+---------------------------- ██╗   ██╗██████╗ ██████╗  █████╗ ████████╗███████╗
+---------------------------- ██║   ██║██╔══██╗██╔══██╗██╔══██╗╚══██╔══╝██╔════╝
+---------------------------- ██║   ██║██████╔╝██║  ██║███████║   ██║   █████╗
+---------------------------- ██║   ██║██╔═══╝ ██║  ██║██╔══██║   ██║   ██╔══╝
+---------------------------- ╚██████╔╝██║     ██████╔╝██║  ██║   ██║   ███████╗
+----------------------------  ╚═════╝ ╚═╝     ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝
 
 
 type Msg
-    = TickTime Posix
-    | AdjustTimeZone Time.Zone
-    | ReadViewportHeight Dom.Element
-    | ClickOnFreeSpace
+    = InitializationTask ( Dom.Element, Time.Zone, Posix )
+    | TickTime Posix
+    | OnScroll Int
+    | Splitting SplittingMsg Int
     | ClickOnLog LogID
     | InputTitle String
     | InputTitleKeyDown Int
@@ -162,33 +141,63 @@ type Msg
     | Noop
 
 
+type SplittingMsg
+    = SplitStart
+    | SplitProgress
+    | SplitEnd
+
+
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case ( msg, model.mode ) of
+        ( InitializationTask ( element, zone, posix ), _ ) ->
+            { model | currentZone = zone, currentTime = posix }
+                |> updateViewport
+                    -- Hardcoded nav height = 80
+                    (\v -> { v | height = round element.element.height - 80 })
+                |> andDebug (\m -> Debug.log "VP Height" m.viewport.height)
+                |> andDebug (\m -> Debug.log "Time" posix)
+                |> andDebug (\m -> Debug.log "Time" posix)
+                |> setViewportBoundaries
+                |> andScrollViewportToNow
+
         ( TickTime posix, _ ) ->
             ( { model | currentTime = posix }, Cmd.none )
 
-        ( AdjustTimeZone zone, _ ) ->
-            ( { model | currentZone = zone }, Cmd.none )
-
-        ( ReadViewportHeight element, _ ) ->
-            ( { model | viewportHeight = round element.element.height }, Cmd.none )
-
-        ( ClickOnFreeSpace, Scrolling ) ->
-            let
-                newLog =
-                    createNewLog model
-            in
-            { model
-                | logs = model.logs |> Dict.insert newLog.id newLog
-            }
-                |> andBackupModel
-
-        ( ClickOnFreeSpace, Edit _ ) ->
+        ( OnScroll scrollPos, _ ) ->
             model
-                |> updateMode Scrolling
-                |> andBackupModel
+                |> updateViewport (\v -> { v | scroll = scrollPos })
+                -- |> andDebug (\m -> Debug.log "ReceivedScroll" scrollPos)
+                |> andCmd Cmd.none
 
+        ( Splitting splitMsg posY, _ ) ->
+            let
+                _ =
+                    ""
+
+                --Debug.log "Split msg " posY
+            in
+            case splitMsg of
+                SplitStart ->
+                    model
+                        |> updateDragStatus posY
+                        |> andCmd Cmd.none
+
+                SplitProgress ->
+                    model
+                        |> updateDragStatus posY
+                        |> andCmd Cmd.none
+
+                SplitEnd ->
+                    model
+                        |> addLogFromDrag
+                        |> updateDragStatus -1
+                        |> andBackupModel
+
+        -- ( ClickOnFreeSpace, Edit _ ) ->
+        --     model
+        --         |> updateMode Scrolling
+        --         |> andBackupModel
         ( ClickOnLog logID, Scrolling ) ->
             ( { model | mode = Edit logID }
             , Task.attempt (\_ -> Noop) (Dom.focus "editing-log")
@@ -211,7 +220,7 @@ update msg model =
 
         ( DeleteLog logID, _ ) ->
             model
-                |> updateLog logID (\l -> { l | category = Empty })
+                |> updateLog logID (\l -> { l | category = Logs.Empty })
                 |> consolidateEmptyLogs
                 |> updateMode Scrolling
                 |> andBackupModel
@@ -220,38 +229,102 @@ update msg model =
             ( model, Cmd.none )
 
 
+andDebug : (Model -> a) -> Model -> Model
+andDebug fun model =
+    let
+        _ =
+            fun model
+    in
+    model
+
+
 andBackupModel : Model -> ( Model, Cmd Msg )
 andBackupModel model =
     ( model, Ports.backupToLocalStorage (E.encode 0 (modelEncode model)) )
 
 
-consolidateEmptyLogs : Model -> Model
-consolidateEmptyLogs model =
-    let
-        allLogs =
-            sortedLogs model.logs
-    in
-    case allLogs of
-        _ :: rest ->
-            model
-                |> updateLogs
-                    (rest
-                        |> List.map2 detectUnnecesaryEmptyLog allLogs
-                        |> List.filterMap identity
-                        |> List.foldl (\log logs -> Dict.remove log.id logs) model.logs
-                    )
-
-        [] ->
-            model
-
-
-detectUnnecesaryEmptyLog : Log -> Log -> Maybe Log
-detectUnnecesaryEmptyLog log1 log2 =
-    if log1.category == Empty && log2.category == Empty then
-        Just log2
+updateDragStatus : Int -> Model -> Model
+updateDragStatus clientY model =
+    if clientY == -1 then
+        { model | newLogDrag = DragInactive }
 
     else
-        Nothing
+        let
+            posix =
+                clientY
+                    |> (+) model.viewport.scroll
+                    |> VP.pxToMillis model.viewport
+                    |> snapBy model.snapMillis
+                    |> Time.millisToPosix
+        in
+        { model
+            | newLogDrag =
+                case model.newLogDrag of
+                    DragInactive ->
+                        Dragging ( posix, posix )
+
+                    Dragging ( first, second ) ->
+                        Dragging ( first, posix )
+        }
+
+
+snapBy : Int -> Int -> Int
+snapBy snap num =
+    num - modBy snap num
+
+
+
+-- findLogAt : Logs -> Posix -> Log
+-- findLogAt logs posix =
+--     sortedLogs logs
+--         |>
+
+
+snapToLogBoundary : Posix -> Posix -> Posix -> Posix
+snapToLogBoundary upperBoundary lowerBoundary posix =
+    if PXE.diff upperBoundary posix > PXE.diff lowerBoundary posix then
+        lowerBoundary
+
+    else
+        upperBoundary
+
+
+consolidateEmptyLogs : Model -> Model
+consolidateEmptyLogs model =
+    model
+        |> updateLogs (Logs.consolidateEmpty model.logs)
+
+
+andCmd : Cmd Msg -> Model -> ( Model, Cmd Msg )
+andCmd cmd model =
+    ( model, cmd )
+
+
+updateViewport : (Viewport -> Viewport) -> Model -> Model
+updateViewport updateFun model =
+    { model | viewport = updateFun model.viewport }
+
+
+setViewportBoundaries : Model -> Model
+setViewportBoundaries model =
+    model
+        |> updateViewport
+            (\v ->
+                { v
+                    | firstDate = PXE.add model.currentTime -(1000 * 60 * 60 * 24 * 5)
+                    , lastDate = PXE.add model.currentTime (1000 * 60 * 60 * 24 * 5)
+                }
+            )
+
+
+andScrollViewportToNow : Model -> ( Model, Cmd Msg )
+andScrollViewportToNow model =
+    ( model
+    , Ports.scrollViewportTo <|
+        VP.millisToPx
+            model.viewport
+            (PXE.diff model.viewport.firstDate model.currentTime)
+    )
 
 
 updateMode : Mode -> Model -> Model
@@ -259,65 +332,63 @@ updateMode mode model =
     { model | mode = mode }
 
 
-updateLog : LogID -> (Log -> Log) -> Model -> Model
-updateLog logID updateFun model =
-    model
-        |> updateLogs (model.logs |> Dict.update logID (Maybe.map updateFun))
-
-
 updateLogs : Logs -> Model -> Model
 updateLogs logs model =
     { model | logs = logs }
 
 
-createNewLog : Model -> Log
-createNewLog { logs, currentTime } =
-    let
-        lastLogAt =
-            sortedLogs logs
-                |> List.reverse
-                |> List.head
-                |> Maybe.map (\l -> sumPosix l.at (1000 * 60 * 60))
-                |> Maybe.withDefault currentTime
-    in
-    { id = newID logs
-    , title = "arsars"
-    , category = Uncategorized
-    , createdAt = currentTime
-    , at = lastLogAt
-
-    -- , endAt =
-    --     currentTime
-    --         |> Time.posixToMillis
-    --         |> (+) (1000 * 60 * 60)
-    --         |> Time.millisToPosix
-    , tags = []
-    , details = ""
-    }
+updateLog : LogID -> (Log -> Log) -> Model -> Model
+updateLog logID updateFun model =
+    { model | logs = Logs.update logID updateFun model.logs }
 
 
-sortedLogs : Logs -> List Log
-sortedLogs logs =
-    Dict.values logs
-        |> List.sortBy (\log -> Time.posixToMillis log.at)
+addLogFromDrag : Model -> Model
+addLogFromDrag model =
+    case model.newLogDrag of
+        Dragging ( start, end ) ->
+            if PXE.diff start end == 0 then
+                model
+
+            else
+                let
+                    ( top, bottom ) =
+                        PXE.sort2 ( start, end )
+
+                    ( topTop, middle, bottomBottom ) =
+                        Logs.findTopBottomMiddle model.logs top bottom
+
+                    newLog1 =
+                        Logs.buildLog (newID model.logs) model.currentTime top
+
+                    newLog2 =
+                        Logs.buildLog (Logs.nextID newLog1.id) model.currentTime bottom
+
+                    middleIsOverridable =
+                        Logs.detectAllOverridable middle
+                in
+                if middleIsOverridable then
+                    model
+                        |> updateLogs
+                            (model.logs
+                                |> Logs.removeMany middle
+                                |> Logs.add newLog1
+                                |> Logs.add newLog2
+                            )
+
+                else
+                    model
+
+        DragInactive ->
+            model
 
 
 
--- snapLog : List Log -> Log -> Log
--- snapLog logs log =
---     case logs of
---         firstLog :: _ ->
---             log
---         [] ->
---             log
--- getSnapLocations : Logs -> List (Int, Int)
--- getSnapLocations logs =
--- ██╗   ██╗██╗███████╗██╗    ██╗███████╗
--- ██║   ██║██║██╔════╝██║    ██║██╔════╝
--- ██║   ██║██║█████╗  ██║ █╗ ██║███████╗
--- ╚██╗ ██╔╝██║██╔══╝  ██║███╗██║╚════██║
---  ╚████╔╝ ██║███████╗╚███╔███╔╝███████║
---   ╚═══╝  ╚═╝╚══════╝ ╚══╝╚══╝ ╚══════╝
+---------------------------------------- ██╗   ██╗██╗███████╗██╗    ██╗███████╗
+---------------------------------------- ██║   ██║██║██╔════╝██║    ██║██╔════╝
+---------------------------------------- ██║   ██║██║█████╗  ██║ █╗ ██║███████╗
+---------------------------------------- ╚██╗ ██╔╝██║██╔══╝  ██║███╗██║╚════██║
+----------------------------------------  ╚████╔╝ ██║███████╗╚███╔███╔╝███████║
+----------------------------------------   ╚═══╝  ╚═╝╚══════╝ ╚══╝╚══╝ ╚══════╝
 
 
 view : Model -> Document Msg
@@ -326,57 +397,79 @@ view model =
     , body =
         [ div [ c "container", id "container" ]
             [ nav [ c "nav" ] []
-            , main_ [ c "main", onClick ClickOnFreeSpace ]
-                [ lazy viewLogsList model
+            , main_ [ c "main" ]
+                -- [ lazy viewLogsList model
+                [ viewViewport
+                    model.viewport
+                    model.newLogDrag
+                    model.currentZone
+                    model.logs
                 ]
             ]
+        , viewDebug model
         ]
     }
 
 
-type alias LogRenderConfig =
-    { initialTime : Posix
-    , pixelsPerHour : Int
-    , timeZone : Time.Zone
-    , mode : Mode
-    }
+
+-- type alias LogRenderConfig =
+--     { initialTime : Posix
+--     , pixelsPerHour : Int
+--     , timeZone : Time.Zone
+--     , mode : Mode
+--     }
 
 
-viewViewport : Time.Posix -> Int -> Html Msg
-viewViewport timePosition millisOnScreen =
-    div [] []
+viewViewport : Viewport -> DragStatus -> Time.Zone -> Logs -> Html Msg
+viewViewport viewport newLogDrag timeZone logs =
+    div
+        [ c "viewport"
+        , id "viewport"
+        , onScroll OnScroll
+        , onSplitStart Splitting
+        , onSplitProgress (newLogDrag /= DragInactive) Splitting
+        , onSplitEnd (newLogDrag /= DragInactive) Splitting
+        ]
+        [ div
+            [ c "logs"
+            , style "height" (px (VP.fullHeight viewport))
+            ]
+            [ case newLogDrag of
+                Dragging ( start, end ) ->
+                    viewLogGhost viewport start end
+
+                DragInactive ->
+                    div [] []
+            , viewLogsList viewport timeZone logs
+            ]
+        ]
 
 
-type alias LogsRenderConfig a =
-    { a
-        | viewportMillis : Int
-        , viewportHeight : Int
-        , currentZone : Time.Zone
-        , logs : Logs
-        , mode : Mode
-    }
+viewLogGhost : Viewport -> Posix -> Posix -> Html Msg
+viewLogGhost viewport start end =
+    let
+        ( top, bottom ) =
+            PXE.sort2 ( start, end )
+    in
+    div
+        [ c "log log__Ghost"
+        , style "top" <| px (VP.posixToPx viewport top)
+        , style "height" <| px (VP.millisToPx viewport (PXE.diff top bottom))
+        ]
+        [ div [ c "log__box" ] [] ]
 
 
-viewLogsList : LogsRenderConfig a -> Html Msg
-viewLogsList { viewportHeight, viewportMillis, currentZone, logs, mode } =
+viewLogsList : Viewport -> Time.Zone -> Logs -> Html Msg
+viewLogsList viewport zone logs =
     let
         allLogs =
-            sortedLogs logs
+            Logs.sorted logs
     in
     div [ c "logs" ]
         (case allLogs of
             firstLog :: restOfLogs ->
-                let
-                    logRenderConfig : LogRenderConfig
-                    logRenderConfig =
-                        { initialTime = firstLog.at
-                        , pixelsPerHour = viewportHeight * (60 * 60 * 1000) // viewportMillis
-                        , timeZone = currentZone
-                        , mode = mode
-                        }
-                in
                 allLogs
-                    |> List.map (\log -> viewLog logRenderConfig log)
+                    |> List.map (\log -> viewLogPaint viewport log)
                     |> List.map2 (\next vlog -> vlog next) restOfLogs
 
             _ ->
@@ -384,12 +477,93 @@ viewLogsList { viewportHeight, viewportMillis, currentZone, logs, mode } =
         )
 
 
-viewLog : LogRenderConfig -> Log -> Log -> Html Msg
-viewLog config log nextLog =
-    viewLogPaint config log nextLog
+viewLogPaint : Viewport -> Log -> Log -> Html Msg
+viewLogPaint viewport log nextLog =
+    div
+        [ c ("log log__" ++ Logs.categoryToSlug log.category)
+        , style "top" <| px (VP.posixToPx viewport log.at)
+        , style "height" <| px (VP.millisToPx viewport (PXE.diff log.at nextLog.at))
+        ]
+        [ div
+            [ c "log__box"
+
+            -- , if log.category == Logs.Empty then
+            -- Ev.onMouseDown (TouchEmptyLog log.id)
+            -- , onSplitStart Splitting
+            --   else
+            --     onClickUnpropagated (DeleteLog log.id)
+            ]
+            []
+        ]
+
+
+viewDebug : Model -> Html Msg
+viewDebug ({ viewport, currentZone } as model) =
+    let
+        logs =
+            Logs.sorted model.logs
+    in
+    div [ c "debug" ]
+        [ div [] [ text ("Scroll: " ++ String.fromInt viewport.scroll) ]
+        , viewDebugPosix "VP first date: " currentZone viewport.firstDate
+        , viewDebugPosix "VP start date: " currentZone (VP.startDate viewport)
+        , viewDebugPosix "VP end date: " currentZone (VP.endDate viewport)
+        , viewDebugPosix "VP last date: " currentZone viewport.lastDate
+        , case model.newLogDrag of
+            Dragging ( first, second ) ->
+                div []
+                    [ viewDebugPosix "Drag From: " currentZone first
+                    , viewDebugPosix "Drag To: " currentZone second
+                    ]
+
+            DragInactive ->
+                div [] []
+        ]
+
+
+viewDebugPosix : String -> Time.Zone -> Posix -> Html Msg
+viewDebugPosix labl zone posix =
+    div []
+        [ text (labl ++ PXE.toNormalDateTime zone posix)
+        ]
 
 
 
+-- type alias LogsRenderConfig a =
+--     { a
+--         | viewportMillis : Int
+--         , viewportHeight : Int
+--         , currentZone : Time.Zone
+--         , logs : Logs
+--         , mode : Mode
+--     }
+-- viewLogsList : LogsRenderConfig a -> Html Msg
+-- viewLogsList { viewportHeight, viewportMillis, currentZone, logs, mode } =
+--     let
+--         allLogs =
+--             sortedLogs logs
+--     in
+--     div [ c "logs" ]
+--         (case allLogs of
+--             firstLog :: restOfLogs ->
+--                 let
+--                     logRenderConfig : LogRenderConfig
+--                     logRenderConfig =
+--                         { initialTime = firstLog.at
+--                         , pixelsPerHour = viewportHeight * (60 * 60 * 1000) // viewportMillis
+--                         , timeZone = currentZone
+--                         , mode = mode
+--                         }
+--                 in
+--                 allLogs
+--                     |> List.map (\log -> viewLog logRenderConfig log)
+--                     |> List.map2 (\next vlog -> vlog next) restOfLogs
+--             _ ->
+--                 []
+--         )
+-- viewLog : LogRenderConfig -> Log -> Log -> Html Msg
+-- viewLog config log nextLog =
+--     viewLogPaint config log nextLog
 -- case config.mode of
 --     Scrolling ->
 --         viewLogSimple config log
@@ -398,83 +572,53 @@ viewLog config log nextLog =
 --             viewLogEdit config log
 --         else
 --             viewLogSimple config log
-
-
-viewLogPaint : LogRenderConfig -> Log -> Log -> Html Msg
-viewLogPaint config log nextLog =
-    div
-        [ c ("log log__" ++ categoryToSlug log.category)
-        , style "top" <|
-            px (calculateTop config.initialTime log.at config.pixelsPerHour)
-        , style "height" <|
-            px (calculateHeight log.at nextLog.at config.pixelsPerHour)
-        ]
-        [ div
-            [ c "log__box"
-            , onClickUnpropagated (DeleteLog log.id)
-            ]
-            []
-        ]
-
-
-calculateTop : Posix -> Posix -> Int -> Int
-calculateTop initialTime thisTime pixelsPerHour =
-    timeDiff initialTime thisTime * pixelsPerHour // (1000 * 60 * 60)
-
-
-calculateHeight : Posix -> Posix -> Int -> Int
-calculateHeight at endAt pixelsPerHour =
-    timeDiff at endAt * pixelsPerHour // (1000 * 60 * 60)
-
-
-timeDiff : Posix -> Posix -> Int
-timeDiff from to =
-    Time.posixToMillis to - Time.posixToMillis from
-
-
-posixToHourString : Time.Zone -> Posix -> String
-posixToHourString timeZone posix =
-    (Time.toHour timeZone posix
-        |> String.fromInt
-        |> String.padLeft 2 '0'
-    )
-        ++ ":"
-        ++ (Time.toMinute timeZone posix
-                |> String.fromInt
-                |> String.padLeft 2 '0'
-           )
-
-
-viewLogSimple : LogRenderConfig -> Log -> Html Msg
-viewLogSimple config log =
-    div [ c ("log log__" ++ categoryToSlug log.category) ]
-        [ div
-            [ c "log__box"
-            , onClickUnpropagated (ClickOnLog log.id)
-            ]
-            [ text (posixToHourString config.timeZone log.at)
-            , text log.title
-            ]
-        ]
-
-
-viewLogEdit : LogRenderConfig -> Log -> Html Msg
-viewLogEdit config log =
-    div [ c "log log--edit" ]
-        [ div [ c "log__box", onClickUnpropagated Noop ]
-            [ input
-                [ value log.title
-                , Attr.id "editing-log"
-                , onInput InputTitle
-                , onKeyDown InputTitleKeyDown
-                ]
-                []
-            , button
-                [ onClick (DeleteLog log.id)
-                ]
-                [ text "X" ]
-            ]
-        ]
+-- viewLogPaint : LogRenderConfig -> Log -> Log -> Html Msg
+-- viewLogPaint config log nextLog =
+--     div
+--         [ c ("log log__" ++ categoryToSlug log.category)
+--         , style "top" <|
+--             px (calculateTop config.initialTime log.at config.pixelsPerHour)
+--         , style "height" <|
+--             px (calculateHeight log.at nextLog.at config.pixelsPerHour)
+--         ]
+--         [ div
+--             [ c "log__box"
+--             , if log.category == Empty then
+--                 -- Ev.onMouseDown (TouchEmptyLog log.id)
+--                 onSplitStart Splitting
+--               else
+--                 onClickUnpropagated (DeleteLog log.id)
+--             ]
+--             []
+--         ]
+-- viewLogSimple : LogRenderConfig -> Log -> Html Msg
+-- viewLogSimple config log =
+--     div [ c ("log log__" ++ categoryToSlug log.category) ]
+--         [ div
+--             [ c "log__box"
+--             , onClickUnpropagated (ClickOnLog log.id)
+--             ]
+--             [ text (posixToHourString config.timeZone log.at)
+--             , text log.title
+--             ]
+--         ]
+-- viewLogEdit : LogRenderConfig -> Log -> Html Msg
+-- viewLogEdit config log =
+--     div [ c "log log--edit" ]
+--         [ div [ c "log__box", onClickUnpropagated Noop ]
+--             [ input
+--                 [ value log.title
+--                 , Attr.id "editing-log"
+--                 , onInput InputTitle
+--                 , onKeyDown InputTitleKeyDown
+--                 ]
+--                 []
+--             , button
+--                 [ onClick (DeleteLog log.id)
+--                 ]
+--                 [ text "X" ]
+--             ]
+--         ]
 
 
 subscriptions : Model -> Sub Msg
@@ -488,17 +632,17 @@ main =
         { init = \localStorageData -> init localStorageData
         , view = view
         , update = update
-        , subscriptions = subscriptions
+        , subscriptions = \_ -> Sub.none
         }
 
 
 
--- ██╗  ██╗███████╗██╗     ██████╗ ███████╗██████╗ ███████╗
--- ██║  ██║██╔════╝██║     ██╔══██╗██╔════╝██╔══██╗██╔════╝
--- ███████║█████╗  ██║     ██████╔╝█████╗  ██████╔╝███████╗
--- ██╔══██║██╔══╝  ██║     ██╔═══╝ ██╔══╝  ██╔══██╗╚════██║
--- ██║  ██║███████╗███████╗██║     ███████╗██║  ██║███████║
--- ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝     ╚══════╝╚═╝  ╚═╝╚══════╝
+---------------------- ██╗  ██╗███████╗██╗     ██████╗ ███████╗██████╗ ███████╗
+---------------------- ██║  ██║██╔════╝██║     ██╔══██╗██╔════╝██╔══██╗██╔════╝
+---------------------- ███████║█████╗  ██║     ██████╔╝█████╗  ██████╔╝███████╗
+---------------------- ██╔══██║██╔══╝  ██║     ██╔═══╝ ██╔══╝  ██╔══██╗╚════██║
+---------------------- ██║  ██║███████╗███████╗██║     ███████╗██║  ██║███████║
+---------------------- ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝     ╚══════╝╚═╝  ╚═╝╚══════╝
 
 
 px : Int -> String
@@ -522,121 +666,116 @@ onKeyDown tagger =
     Ev.on "keydown" (D.map tagger Ev.keyCode)
 
 
+onSplitStart : (SplittingMsg -> Int -> msg) -> H.Attribute msg
+onSplitStart msg =
+    Ev.on "mousedown" <|
+        D.map (msg SplitProgress)
+            (fi "clientY" D.int)
 
--- ███████╗███╗   ██╗ ██████╗ ██████╗ ██████╗ ███████╗██████╗ ███████╗
--- ██╔════╝████╗  ██║██╔════╝██╔═══██╗██╔══██╗██╔════╝██╔══██╗██╔════╝
--- █████╗  ██╔██╗ ██║██║     ██║   ██║██║  ██║█████╗  ██████╔╝███████╗
--- ██╔══╝  ██║╚██╗██║██║     ██║   ██║██║  ██║██╔══╝  ██╔══██╗╚════██║
--- ███████╗██║ ╚████║╚██████╗╚██████╔╝██████╔╝███████╗██║  ██║███████║
--- ╚══════╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝╚══════╝
+
+
+-- loggingDecoder <|
+--     D.map (msg SplitStart) (fi "offsetY" D.int)
+
+
+onSplitProgress : Bool -> (SplittingMsg -> Int -> msg) -> H.Attribute msg
+onSplitProgress splitting msg =
+    Ev.on "mousemove" <|
+        rejectDecoderIf (not splitting) <|
+            loggingDecoder <|
+                D.map (msg SplitProgress) (fi "clientY" D.int)
+
+
+onSplitEnd : Bool -> (SplittingMsg -> Int -> msg) -> H.Attribute msg
+onSplitEnd splitting msg =
+    Ev.on "mouseup" <|
+        rejectDecoderIf (not splitting) <|
+            D.map (msg SplitEnd) (fi "clientY" D.int)
+
+
+rejectDecoderIf : Bool -> D.Decoder msg -> D.Decoder msg
+rejectDecoderIf condition decoder =
+    if condition then
+        D.value
+            |> D.andThen (\_ -> D.fail "Decoding aborted")
+
+    else
+        decoder
+
+
+
+-- transverse up with offsetParent summing offsetTop until (id === "viewport")
+
+
+viewportYDecoder : D.Decoder a -> D.Decoder a
+viewportYDecoder decoder =
+    decoder
+
+
+onScroll : (Int -> msg) -> H.Attribute msg
+onScroll msg =
+    Ev.on "scroll" (D.map msg (fi "target" (fi "scrollTop" D.int)))
+
+
+
+-- (D.map D.int (D.field "scrollTop" D.int))
+
+
+onTouchStart : (TouchEvent -> msg) -> H.Attribute msg
+onTouchStart msg =
+    Ev.on "touchstart" (D.map msg (fi "touches" (D.list mousePositionDecoder)))
+
+
+type alias TouchEvent =
+    List Point
+
+
+type alias Point =
+    { x : Int, y : Int }
+
+
+mousePositionDecoder : D.Decoder Point
+mousePositionDecoder =
+    D.map2 Point (fi "clientX" D.int) (fi "clientY" D.int)
+
+
+loggingDecoder : D.Decoder a -> D.Decoder a
+loggingDecoder realDecoder =
+    D.value
+        |> D.andThen
+            (\event ->
+                let
+                    _ =
+                        ""
+
+                    -- Debug.log "Ev" (E.encode 2 event)
+                in
+                case D.decodeValue realDecoder event of
+                    Ok decoded ->
+                        D.succeed decoded
+
+                    Err error ->
+                        error
+                            |> D.errorToString
+                            |> Debug.log "decoding error"
+                            |> D.fail
+            )
+
+
+
+------------ ███████╗███╗   ██╗ ██████╗ ██████╗ ██████╗ ███████╗██████╗ ███████╗
+------------ ██╔════╝████╗  ██║██╔════╝██╔═══██╗██╔══██╗██╔════╝██╔══██╗██╔════╝
+------------ █████╗  ██╔██╗ ██║██║     ██║   ██║██║  ██║█████╗  ██████╔╝███████╗
+------------ ██╔══╝  ██║╚██╗██║██║     ██║   ██║██║  ██║██╔══╝  ██╔══██╗╚════██║
+------------ ███████╗██║ ╚████║╚██████╗╚██████╔╝██████╔╝███████╗██║  ██║███████║
+------------ ╚══════╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝╚══════╝
 
 
 modelEncode : Model -> E.Value
 modelEncode model =
-    E.object [ ( "logs", logsEncode model.logs ) ]
+    E.object [ ( "logs", Logs.encoder model.logs ) ]
 
 
 modelDecode : D.Decoder ModelBackup
 modelDecode =
-    D.map ModelBackup
-        (D.field "logs" logsDecode)
-
-
-logsEncode : Logs -> E.Value
-logsEncode =
-    E.dict identity logEncode
-
-
-logsDecode : D.Decoder Logs
-logsDecode =
-    D.dict logDecode
-
-
-logEncode : Log -> E.Value
-logEncode log =
-    E.object
-        [ ( "id", E.string log.id )
-        , ( "title", E.string log.title )
-        , ( "category", categoryEncoder log.category )
-        , ( "createdAt", posixEncoder log.createdAt )
-        , ( "at", posixEncoder log.at )
-        , ( "tags", E.list E.string log.tags )
-        , ( "details", E.string log.details )
-        ]
-
-
-logDecode : D.Decoder Log
-logDecode =
-    D.succeed Log
-        |> Dp.required "id" D.string
-        |> Dp.required "title" D.string
-        |> Dp.required "category" categoryDecoder
-        |> Dp.required "createdAt" posixDecoder
-        |> Dp.required "at" posixDecoder
-        |> Dp.required "tags" (D.list D.string)
-        |> Dp.required "details" D.string
-
-
-categoryEncoder : Category -> E.Value
-categoryEncoder category =
-    E.string (categoryToSlug category)
-
-
-categoryToSlug : Category -> String
-categoryToSlug category =
-    case category of
-        SelfCare ->
-            "SelfCare"
-
-        Recreative ->
-            "Recreative"
-
-        Creative ->
-            "Creative"
-
-        SelfGrowth ->
-            "SelfGrowth"
-
-        Uncategorized ->
-            "Uncategorized"
-
-        Empty ->
-            "Empty"
-
-
-categoryDecoder : D.Decoder Category
-categoryDecoder =
-    D.string
-        |> D.andThen
-            (\str ->
-                D.succeed
-                    (case str of
-                        "SelfCare" ->
-                            SelfCare
-
-                        "Recreative" ->
-                            Recreative
-
-                        "Creative" ->
-                            Creative
-
-                        "SelfGrowth" ->
-                            SelfGrowth
-
-                        "Uncategorized" ->
-                            Uncategorized
-
-                        _ ->
-                            Empty
-                    )
-            )
-
-
-posixEncoder : Posix -> E.Value
-posixEncoder time =
-    E.int (Time.posixToMillis time)
-
-
-posixDecoder : D.Decoder Posix
-posixDecoder =
-    D.int |> D.andThen (\millis -> D.succeed (Time.millisToPosix millis))
+    D.map ModelBackup (fi "logs" Logs.decoder)
