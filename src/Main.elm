@@ -9,12 +9,12 @@ import Html.Events as Ev exposing (onClick, onInput, stopPropagationOn)
 import Html.Lazy exposing (lazy, lazy2, lazy3, lazy4)
 import Json.Decode as D
 import Json.Encode as E
-import Logs exposing (Log, LogID, Logs, newID)
-import Lorem
+import Log exposing (Log)
 import Ports
 import PosixExtra as PXE
 import Task exposing (Task)
 import Time exposing (Posix)
+import Timeline exposing (Timeline)
 import Viewport as VP exposing (Viewport)
 
 
@@ -38,6 +38,14 @@ cx =
 ------------------------------------    ██║     ╚██╔╝  ██╔═══╝ ██╔══╝  ╚════██║
 ------------------------------------    ██║      ██║   ██║     ███████╗███████║
 ------------------------------------    ╚═╝      ╚═╝   ╚═╝     ╚══════╝╚══════╝
+
+
+type alias Logs =
+    Timeline Log
+
+
+type alias LogID =
+    Int
 
 
 type alias Model =
@@ -88,7 +96,7 @@ init localStorageData =
                     modelBackup.logs
 
                 Err errorMsg ->
-                    Debug.log (D.errorToString errorMsg) (Dict.fromList [])
+                    Debug.log (D.errorToString errorMsg) Timeline.empty
     in
     ( { logs = initialLogs
       , mode = Scrolling
@@ -136,7 +144,7 @@ type Msg
     | Splitting SplittingMsg Int
     | ClickOnLog LogID
     | InputTitle LogID String
-    | SetCategory LogID Logs.Category
+    | SetCategory LogID (Maybe Log.Category)
     | InputTitleKeyDown Int
     | DeleteLog LogID
     | Noop
@@ -228,9 +236,7 @@ update msg model =
 
         ( DeleteLog logID, _ ) ->
             model
-                |> updateLog logID (\l -> { l | category = Logs.Empty })
-                |> consolidateEmptyLogs
-                |> updateMode Scrolling
+                |> updateLogs (Timeline.remove logID model.logs)
                 |> andBackupModel
 
         ( _, _ ) ->
@@ -288,12 +294,10 @@ snapBy snap num =
 --         lowerBoundary
 --     else
 --         upperBoundary
-
-
-consolidateEmptyLogs : Model -> Model
-consolidateEmptyLogs model =
-    model
-        |> updateLogs (Logs.consolidateEmpty model.logs)
+-- consolidateEmptyLogs : Model -> Model
+-- consolidateEmptyLogs model =
+--     model
+--         |> updateLogs (Logs.consolidateEmpty model.logs)
 
 
 andCmd : Cmd Msg -> Model -> ( Model, Cmd Msg )
@@ -340,18 +344,14 @@ updateLogs logs model =
 
 updateLog : LogID -> (Log -> Log) -> Model -> Model
 updateLog logID updateFun model =
-    { model | logs = Logs.update logID updateFun model.logs }
+    { model | logs = model.logs |> Timeline.update logID updateFun }
 
 
 addLogFromDrag : Model -> Model
 addLogFromDrag model =
     case model.newLogDrag of
         Dragging ( start, end ) ->
-            { model
-                | logs =
-                    model.logs
-                        |> Logs.addNewLogOnRange start end model.currentTime
-            }
+            { model | logs = model.logs |> Timeline.add Log.empty start end (\l -> l.title == "") }
 
         DragInactive ->
             model
@@ -434,47 +434,58 @@ viewLogGhost viewport start end =
 
 viewLogsList : Viewport -> Time.Zone -> Logs -> Html Msg
 viewLogsList viewport zone logs =
-    let
-        allLogs =
-            Logs.sorted logs
-    in
     div [ c "logs" ]
-        (case allLogs of
-            firstLog :: restOfLogs ->
-                allLogs
-                    |> List.map (\log -> viewLogPaint viewport zone log)
-                    |> List.map2 (\next vlog -> vlog next) restOfLogs
-
-            _ ->
-                []
+        (logs
+            |> Timeline.map (\index log nextLog -> viewLogPaint viewport zone index log nextLog)
         )
 
 
-viewLogPaint : Viewport -> Time.Zone -> Log -> Log -> Html Msg
-viewLogPaint viewport zone log nextLog =
+viewLogPaint : Viewport -> Time.Zone -> LogID -> Maybe Log -> ( Posix, Posix ) -> Html Msg
+viewLogPaint viewport zone index maybeLog ( top, bottom ) =
     let
         timespan =
-            PXE.diff log.at nextLog.at
+            PXE.diff top bottom
     in
-    div
-        [ c ("log log--" ++ Logs.categoryToSlug log.category)
-        , style "top" <| px (VP.posixToPx viewport log.at)
-        , style "height" <| px (VP.millisToPx viewport timespan)
-        , viewLogBoxSizeClass timespan
-        ]
-        [ viewLogTime zone log.at
-        , viewLogBox log
+    case maybeLog of
+        Nothing ->
+            div
+                [ c "log log--Empty"
+                , topStyle viewport top
+                , heightStyle viewport timespan
+                ]
+                [ viewLogTime zone top
+                ]
 
-        -- div
-        -- [ c "log__box"
-        -- -- , if log.category == Logs.Empty then
-        -- -- Ev.onMouseDown (TouchEmptyLog log.id)
-        -- -- , onSplitStart Splitting
-        -- --   else
-        -- --     onClickUnpropagated (DeleteLog log.id)
-        -- ]
-        -- []
-        ]
+        Just log ->
+            div
+                [ c ("log log--" ++ Log.categoryToSlug log.category)
+                , topStyle viewport top
+                , heightStyle viewport timespan
+                , viewLogBoxSizeClass timespan
+                ]
+                [ viewLogTime zone top
+                , viewLogBox index log
+
+                -- div
+                -- [ c "log__box"
+                -- -- , if log.category == Logs.Empty then
+                -- -- Ev.onMouseDown (TouchEmptyLog log.id)
+                -- -- , onSplitStart Splitting
+                -- --   else
+                -- --     onClickUnpropagated (DeleteLog log.id)
+                -- ]
+                -- []
+                ]
+
+
+topStyle : Viewport -> Posix -> H.Attribute Msg
+topStyle vp top =
+    style "top" <| px (VP.posixToPx vp top)
+
+
+heightStyle : Viewport -> Int -> H.Attribute Msg
+heightStyle vp timespan =
+    style "height" <| px (VP.millisToPx vp timespan)
 
 
 viewLogBoxSizeClass : Int -> H.Attribute Msg
@@ -506,60 +517,52 @@ viewLogTime zone posix =
 --     div [c "log__box"] []
 
 
-viewLogBox : Log -> Html Msg
-viewLogBox log =
-    if log.category == Logs.Empty then
-        div [] []
-
-    else
-        div [ c "log__box" ]
-            [ div [ c "log__category", noPropagation "mousedown" ]
-                (if log.category == Logs.Uncategorized then
-                    [ viewLogBoxCatSelect Logs.SelfCare (SetCategory log.id)
-                    , viewLogBoxCatSelect Logs.Recreative (SetCategory log.id)
-                    , viewLogBoxCatSelect Logs.Creative (SetCategory log.id)
-                    , viewLogBoxCatSelect Logs.SelfGrowth (SetCategory log.id)
-                    ]
-
-                 else
-                    [ viewLogBoxCatSelect Logs.Uncategorized (SetCategory log.id) ]
-                )
-            , div
-                [ c "log__title" ]
-                [ input
-                    [ c "log__titleInput"
-                    , noPropagation "mousedown"
-                    , onInput (InputTitle log.id)
-                    , value log.title
-                    ]
-                    []
-
-                -- , div [] [ text log.id ]
+viewLogBox : LogID -> Log -> Html Msg
+viewLogBox index log =
+    div [ c "log__box" ]
+        [ div [ c "log__category", noPropagation "mousedown" ]
+            (if log.category == Nothing then
+                [ viewLogBoxCatSelect Log.SelfCare (SetCategory index)
+                , viewLogBoxCatSelect Log.Recreative (SetCategory index)
+                , viewLogBoxCatSelect Log.Creative (SetCategory index)
+                , viewLogBoxCatSelect Log.SelfGrowth (SetCategory index)
                 ]
-            , button
-                [ c "log__delete"
+
+             else
+                [ div [ onClick (SetCategory index Nothing) ] [] ]
+            )
+        , div
+            [ c "log__title" ]
+            [ input
+                [ c "log__titleInput"
                 , noPropagation "mousedown"
-                , onClick (DeleteLog log.id)
+                , onInput (InputTitle index)
+                , value log.title
                 ]
-                [ text "×" ]
+                []
+
+            -- , div [] [ text log.id ]
             ]
+        , button
+            [ c "log__delete"
+            , noPropagation "mousedown"
+            , onClick (DeleteLog index)
+            ]
+            [ text "×" ]
+        ]
 
 
-viewLogBoxCatSelect : Logs.Category -> (Logs.Category -> msg) -> Html msg
+viewLogBoxCatSelect : Log.Category -> (Maybe Log.Category -> msg) -> Html msg
 viewLogBoxCatSelect category msg =
     div
-        [ c ("log__categorySelect--" ++ Logs.categoryToSlug category)
-        , onClick (msg category)
+        [ c ("log__categorySelect--" ++ Log.categoryToSlug (Just category))
+        , onClick (msg (Just category))
         ]
         []
 
 
 viewDebug : Model -> Html Msg
 viewDebug ({ viewport, currentZone } as model) =
-    let
-        logs =
-            Logs.sorted model.logs
-    in
     div [ c "debug" ]
         [ div [] [ text ("Scroll: " ++ String.fromInt viewport.scroll) ]
         , viewDebugPosix "VP first date: " currentZone viewport.firstDate
@@ -835,9 +838,9 @@ loggingDecoder realDecoder =
 
 modelEncode : Model -> E.Value
 modelEncode model =
-    E.object [ ( "logs", Logs.encoder model.logs ) ]
+    E.object [ ( "logs", Timeline.encoder Log.encoder model.logs ) ]
 
 
 modelDecode : D.Decoder ModelBackup
 modelDecode =
-    D.map ModelBackup (fi "logs" Logs.decoder)
+    D.map ModelBackup (fi "logs" (Timeline.decoder Log.decoder))

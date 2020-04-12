@@ -65,28 +65,28 @@ decoder =
 
 categoryEncoder : Maybe Category -> E.Value
 categoryEncoder category =
-    case category of
-        Just cat ->
-            E.string (categoryToSlug cat)
+    E.string (categoryToSlug category)
+
+
+categoryToSlug : Maybe Category -> String
+categoryToSlug maybeCategory =
+    case maybeCategory of
+        Just category ->
+            case category of
+                SelfCare ->
+                    "SelfCare"
+
+                Recreative ->
+                    "Recreative"
+
+                Creative ->
+                    "Creative"
+
+                SelfGrowth ->
+                    "SelfGrowth"
 
         Nothing ->
-            E.null
-
-
-categoryToSlug : Category -> String
-categoryToSlug category =
-    case category of
-        SelfCare ->
-            "SelfCare"
-
-        Recreative ->
-            "Recreative"
-
-        Creative ->
-            "Creative"
-
-        SelfGrowth ->
-            "SelfGrowth"
+            ""
 
 
 categoryDecoder : D.Decoder (Maybe Category)

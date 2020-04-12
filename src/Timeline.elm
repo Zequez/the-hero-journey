@@ -1,17 +1,22 @@
 module Timeline exposing
-    ( add
+    ( Split(..)
+    , Timeline
+    , add
     , decoder
     , empty
     , encoder
+    , map
     , remove
     , resize
     , set
+    , update
     )
 
 import Array exposing (Array)
 import Array.Extra
 import Json.Decode as D
 import Json.Encode as E
+import PosixExtra as PXE
 import Time exposing (Posix)
 
 
@@ -30,24 +35,32 @@ empty =
 
 
 add : data -> Posix -> Posix -> (data -> Bool) -> Timeline data -> Timeline data
-add data start end dataIsUseless (Timeline array) =
-    case makeSpaceFor start end dataIsUseless array of
-        Available newArray ->
-            newArray
-                |> Array.push (Logd start data)
-                |> Array.push (Stop end)
-                |> reSort
-                |> Timeline
+add data unsortedStart unsortedEnd dataIsUseless (Timeline array) =
+    let
+        ( start, end ) =
+            PXE.sort2 ( unsortedStart, unsortedEnd )
+    in
+    if PXE.diff start end == 0 then
+        Timeline array
 
-        MovedOne newArray ->
-            newArray
-                |> Array.push (Logd start data)
-                |> reSort
-                |> Timeline
+    else
+        case makeSpaceFor start end dataIsUseless array of
+            Available newArray ->
+                newArray
+                    |> Array.push (Logd start data)
+                    |> Array.push (Stop end)
+                    |> reSort
+                    |> Timeline
 
-        CouldntOverride ->
-            array
-                |> Timeline
+            MovedOne newArray ->
+                newArray
+                    |> Array.push (Logd start data)
+                    |> reSort
+                    |> Timeline
+
+            CouldntOverride ->
+                array
+                    |> Timeline
 
 
 type MakeSpaceResult data
@@ -98,10 +111,33 @@ set i log (Timeline array) =
             Timeline array
 
 
+update : Int -> (data -> data) -> Timeline data -> Timeline data
+update i updateFun (Timeline array) =
+    let
+        maybeSplit =
+            array
+                |> Array.get i
+    in
+    case maybeSplit of
+        Just split ->
+            case split of
+                Logd posix data ->
+                    array
+                        |> Array.set i (Logd posix (updateFun data))
+                        |> Timeline
+
+                Stop _ ->
+                    Timeline array
+
+        Nothing ->
+            Timeline array
+
+
 remove : Int -> Timeline data -> Timeline data
 remove i (Timeline array) =
     array
         |> Array.Extra.removeAt i
+        |> consolidateEmpty
         |> Timeline
 
 
@@ -145,6 +181,33 @@ resize i posix (Timeline array) =
             Timeline array
 
 
+map : (Int -> Maybe data -> ( Posix, Posix ) -> a) -> Timeline data -> List a
+map mapFun (Timeline array) =
+    let
+        shifted =
+            array
+                |> Array.slice 1 (Array.length array)
+                |> Array.toList
+    in
+    array
+        |> Array.toIndexedList
+        |> List.map2
+            (\next ( index, first ) ->
+                mapFun index (splitToMaybe first) ( unwrapPosix first, unwrapPosix next )
+            )
+            shifted
+
+
+splitToMaybe : Split data -> Maybe data
+splitToMaybe split =
+    case split of
+        Stop _ ->
+            Nothing
+
+        Logd _ data ->
+            Just data
+
+
 
 -- ██╗███╗   ██╗████████╗███████╗██████╗ ███╗   ██╗ █████╗ ██╗     ███████╗
 -- ██║████╗  ██║╚══██╔══╝██╔════╝██╔══██╗████╗  ██║██╔══██╗██║     ██╔════╝
@@ -152,6 +215,29 @@ resize i posix (Timeline array) =
 -- ██║██║╚██╗██║   ██║   ██╔══╝  ██╔══██╗██║╚██╗██║██╔══██║██║     ╚════██║
 -- ██║██║ ╚████║   ██║   ███████╗██║  ██║██║ ╚████║██║  ██║███████╗███████║
 -- ╚═╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝╚══════╝
+
+
+consolidateEmpty : Array (Split data) -> Array (Split data)
+consolidateEmpty array =
+    case Array.toList array of
+        first :: tail ->
+            tail
+                |> List.map2
+                    (\prevSplit split ->
+                        case ( prevSplit, split ) of
+                            ( Stop _, Stop _ ) ->
+                                Nothing
+
+                            _ ->
+                                Just split
+                    )
+                    (Array.toList array)
+                |> List.filterMap identity
+                |> (::) first
+                |> Array.fromList
+
+        _ ->
+            array
 
 
 setSplitPosix : Posix -> Split data -> Split data
@@ -245,8 +331,8 @@ sortFun split =
 -- ╚══════╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝╚══════╝
 
 
-encoder : Timeline data -> (data -> E.Value) -> E.Value
-encoder (Timeline array) dataEncoder =
+encoder : (data -> E.Value) -> Timeline data -> E.Value
+encoder dataEncoder (Timeline array) =
     E.list (splitEncoder dataEncoder) (Array.toList array)
 
 
