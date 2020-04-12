@@ -54,7 +54,7 @@ add data unsortedStart unsortedEnd canOverrideCheck autoExpandMax (Timeline arra
                     |> reSort
                     |> Timeline
 
-            MovedOne newArray ->
+            EndstopExists newArray ->
                 newArray
                     |> Array.push (Logd start data)
                     |> reSort
@@ -68,7 +68,7 @@ add data unsortedStart unsortedEnd canOverrideCheck autoExpandMax (Timeline arra
 addAutoExpand : data -> Posix -> Int -> Array (Split data) -> Array (Split data)
 addAutoExpand data point maxDuration array =
     -- What a beautiful piece of machinery!
-    case Debug.log "boundaries" (findBoundariesBy (posixToMillis point) (toPosix >> posixToMillis) array) of
+    case findBoundariesBy (posixToMillis point) (toPosix >> posixToMillis) array of
         OnTop _ ->
             array
 
@@ -282,34 +282,81 @@ findBoundariesBy query mapFun list =
 
 type MakeSpaceResult data
     = Available (Array (Split data))
-    | MovedOne (Array (Split data))
+    | EndstopExists (Array (Split data))
     | CouldntOverride
 
 
 makeSpaceFor : Posix -> Posix -> (data -> Bool) -> Array (Split data) -> MakeSpaceResult data
 makeSpaceFor start end canOverrideCheck array =
     let
-        preCleanArray =
+        slice =
             array
-                |> Array.Extra.removeWhen
-                    (isBetweenAndSafeToOverride start end canOverrideCheck)
-
-        leftBetween =
-            preCleanArray
-                |> sliceBetween start end
+                |> sliceBetween start end True
+                |> List.reverse
     in
-    case leftBetween of
+    case slice of
         [] ->
-            preCleanArray
-                |> Available
+            array |> Available
 
-        ( i, justTheOneSplit ) :: [] ->
-            preCleanArray
-                |> Array.set i (setSplitPosix end justTheOneSplit)
-                |> MovedOne
+        ( i, lastItem ) :: _ ->
+            let
+                result =
+                    array
+                        |> Array.set i (setSplitPosix end lastItem)
+                        |> tryToDeleteEverythingBetween start end canOverrideCheck
+            in
+            if result |> sliceBetween start end False |> List.isEmpty then
+                EndstopExists result
 
-        _ ->
-            CouldntOverride
+            else
+                CouldntOverride
+
+
+tryToDeleteEverythingBetween : Posix -> Posix -> (data -> Bool) -> Array (Split data) -> Array (Split data)
+tryToDeleteEverythingBetween start end canOverrideCheck array =
+    let
+        top =
+            posixToMillis start
+
+        bottom =
+            posixToMillis end
+    in
+    array
+        |> Array.Extra.removeWhen
+            (\split ->
+                if toMillis split >= top && toMillis split < bottom then
+                    case split of
+                        Stop _ ->
+                            True
+
+                        Logd _ log ->
+                            canOverrideCheck log
+
+                else
+                    False
+            )
+
+
+sliceBetween : Posix -> Posix -> Bool -> Array (Split data) -> List ( Int, Split data )
+sliceBetween start end includeLast arr =
+    let
+        top =
+            posixToMillis start
+
+        bottom =
+            posixToMillis end
+    in
+    arr
+        |> Array.toIndexedList
+        |> List.filter
+            (\( _, split ) ->
+                -- Intentionally include the last one
+                if includeLast then
+                    toMillis split >= top && toMillis split <= bottom
+
+                else
+                    toMillis split >= top && toMillis split < bottom
+            )
 
 
 consolidateEmpty : Array (Split data) -> Array (Split data)
@@ -335,6 +382,14 @@ consolidateEmpty array =
             array
 
 
+reSort : Array (Split data) -> Array (Split data)
+reSort array =
+    array
+        |> Array.toList
+        |> List.sortBy sortFun
+        |> Array.fromList
+
+
 setSplitPosix : Posix -> Split data -> Split data
 setSplitPosix posix split =
     case split of
@@ -343,55 +398,6 @@ setSplitPosix posix split =
 
         Logd _ log ->
             Logd posix log
-
-
-isBetweenAndSafeToOverride : Posix -> Posix -> (data -> Bool) -> Split data -> Bool
-isBetweenAndSafeToOverride start end dataIsUseless split =
-    splitIsBetween (posixToMillis start) (posixToMillis end) split
-        && (PXE.diff (toPosix split) end /= 0)
-        && isSafeToOverride dataIsUseless split
-
-
-isSafeToOverride : (data -> Bool) -> Split data -> Bool
-isSafeToOverride dataIsUseless split =
-    case split of
-        Stop _ ->
-            True
-
-        Logd _ log ->
-            dataIsUseless log
-
-
-sliceBetween : Posix -> Posix -> Array (Split data) -> List ( Int, Split data )
-sliceBetween from to arr =
-    arr
-        |> Array.toIndexedList
-        |> List.filter
-            (\( _, split ) ->
-                splitIsBetween
-                    (posixToMillis from)
-                    (posixToMillis to)
-                    split
-            )
-
-
-splitIsBetween : Int -> Int -> Split data -> Bool
-splitIsBetween from to split =
-    let
-        posix =
-            split
-                |> toPosix
-                |> posixToMillis
-    in
-    from < posix && posix <= to
-
-
-reSort : Array (Split data) -> Array (Split data)
-reSort array =
-    array
-        |> Array.toList
-        |> List.sortBy sortFun
-        |> Array.fromList
 
 
 getPosixAt : Int -> Array (Split data) -> Maybe Posix
@@ -409,6 +415,11 @@ toPosix split =
 
         Logd posix _ ->
             posix
+
+
+toMillis : Split data -> Int
+toMillis =
+    toPosix >> Time.posixToMillis
 
 
 sortFun : Split data -> Int
