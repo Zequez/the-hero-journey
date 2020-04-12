@@ -2,6 +2,7 @@ module Timeline exposing
     ( Split(..)
     , Timeline
     , add
+    , addAutoExpand
     , decoder
     , empty
     , encoder
@@ -17,7 +18,7 @@ import Array.Extra
 import Json.Decode as D
 import Json.Encode as E
 import PosixExtra as PXE
-import Time exposing (Posix)
+import Time exposing (Posix, posixToMillis)
 
 
 type Timeline data
@@ -34,17 +35,18 @@ empty =
     Timeline Array.empty
 
 
-add : data -> Posix -> Posix -> (data -> Bool) -> Timeline data -> Timeline data
-add data unsortedStart unsortedEnd dataIsUseless (Timeline array) =
-    let
-        ( start, end ) =
-            PXE.sort2 ( unsortedStart, unsortedEnd )
-    in
-    if PXE.diff start end == 0 then
-        Timeline array
+add : data -> Posix -> Posix -> (data -> Bool) -> Int -> Timeline data -> Timeline data
+add data unsortedStart unsortedEnd canOverrideCheck autoExpandMax (Timeline array) =
+    if PXE.diff unsortedStart unsortedEnd == 0 then
+        addAutoExpand data unsortedStart autoExpandMax array
+            |> Timeline
 
     else
-        case makeSpaceFor start end dataIsUseless array of
+        let
+            ( start, end ) =
+                PXE.sort2 ( unsortedStart, unsortedEnd )
+        in
+        case makeSpaceFor start end canOverrideCheck array of
             Available newArray ->
                 newArray
                     |> Array.push (Logd start data)
@@ -63,36 +65,53 @@ add data unsortedStart unsortedEnd dataIsUseless (Timeline array) =
                     |> Timeline
 
 
-type MakeSpaceResult data
-    = Available (Array (Split data))
-    | MovedOne (Array (Split data))
-    | CouldntOverride
-
-
-makeSpaceFor : Posix -> Posix -> (data -> Bool) -> Array (Split data) -> MakeSpaceResult data
-makeSpaceFor start end dataIsUseless array =
-    let
-        preCleanArray =
+addAutoExpand : data -> Posix -> Int -> Array (Split data) -> Array (Split data)
+addAutoExpand data point maxDuration array =
+    -- What a beautiful piece of machinery!
+    case Debug.log "boundaries" (findBoundariesBy (posixToMillis point) (toPosix >> posixToMillis) array) of
+        OnTop _ ->
             array
-                |> Array.Extra.removeWhen
-                    (isBetweenAndSafeToOverride start end dataIsUseless)
 
-        leftBetween =
-            preCleanArray
-                |> sliceBetween start end
-    in
-    case leftBetween of
-        [] ->
-            preCleanArray
-                |> Available
+        Unbounded ->
+            array
+                |> Array.push (Logd point data)
+                |> Array.push (Stop (PXE.add point maxDuration))
+                |> reSort
 
-        ( i, justTheOneSplit ) :: [] ->
-            preCleanArray
-                |> Array.set i (setSplitPosix end justTheOneSplit)
-                |> MovedOne
+        Dual top bottom ->
+            case top of
+                Stop topPosix ->
+                    if PXE.diff topPosix (toPosix bottom) < maxDuration then
+                        array
+                            |> Array.push (Logd topPosix data)
+                            |> reSort
 
-        _ ->
-            CouldntOverride
+                    else
+                        array
+                            |> Array.push (Logd topPosix data)
+                            |> Array.push (Stop (PXE.add topPosix maxDuration))
+                            |> reSort
+
+                Logd _ _ ->
+                    array
+
+        JustBottom bottom ->
+            if PXE.diff point (toPosix bottom) < maxDuration then
+                array
+                    |> Array.push (Logd point data)
+                    |> reSort
+
+            else
+                array
+                    |> Array.push (Logd point data)
+                    |> Array.push (Stop (PXE.add point maxDuration))
+                    |> reSort
+
+        JustTop _ ->
+            array
+                |> Array.push (Logd point data)
+                |> Array.push (Stop (PXE.add point maxDuration))
+                |> reSort
 
 
 set : Int -> data -> Timeline data -> Timeline data
@@ -135,10 +154,15 @@ update i updateFun (Timeline array) =
 
 remove : Int -> Timeline data -> Timeline data
 remove i (Timeline array) =
-    array
-        |> Array.Extra.removeAt i
-        |> consolidateEmpty
-        |> Timeline
+    case Array.get i array of
+        Just (Logd posix _) ->
+            array
+                |> Array.set i (Stop posix)
+                |> consolidateEmpty
+                |> Timeline
+
+        _ ->
+            Timeline array
 
 
 resize : Int -> Posix -> Timeline data -> Timeline data
@@ -147,20 +171,20 @@ resize i posix (Timeline array) =
         before =
             array
                 |> getPosixAt (i - 1)
-                |> Maybe.map Time.posixToMillis
+                |> Maybe.map posixToMillis
                 |> Maybe.map toFloat
                 |> Maybe.withDefault -(1 / 0)
 
         after =
             array
                 |> getPosixAt (i + 1)
-                |> Maybe.map Time.posixToMillis
+                |> Maybe.map posixToMillis
                 |> Maybe.map toFloat
                 |> Maybe.withDefault (1 / 0)
 
         current =
             posix
-                |> Time.posixToMillis
+                |> posixToMillis
                 |> toFloat
 
         maybeSplit =
@@ -193,7 +217,7 @@ map mapFun (Timeline array) =
         |> Array.toIndexedList
         |> List.map2
             (\next ( index, first ) ->
-                mapFun index (splitToMaybe first) ( unwrapPosix first, unwrapPosix next )
+                mapFun index (splitToMaybe first) ( toPosix first, toPosix next )
             )
             shifted
 
@@ -215,6 +239,77 @@ splitToMaybe split =
 -- ██║██║╚██╗██║   ██║   ██╔══╝  ██╔══██╗██║╚██╗██║██╔══██║██║     ╚════██║
 -- ██║██║ ╚████║   ██║   ███████╗██║  ██║██║ ╚████║██║  ██║███████╗███████║
 -- ╚═╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝╚══════╝
+
+
+type FindBoundariesResult a
+    = Unbounded
+    | OnTop a
+    | JustTop a
+    | JustBottom a
+    | Dual a a
+
+
+findBoundariesBy : comparable -> (a -> comparable) -> Array a -> FindBoundariesResult a
+findBoundariesBy query mapFun list =
+    let
+        ( maybeTop, maybeBottom ) =
+            list
+                |> Array.toList
+                |> List.map (\a -> ( a, mapFun a ))
+                |> List.partition (\( _, comparable ) -> comparable <= query)
+                |> Tuple.mapFirst (List.reverse >> List.head >> Maybe.map Tuple.first)
+                |> Tuple.mapSecond (List.head >> Maybe.map Tuple.first)
+    in
+    case ( maybeTop, maybeBottom ) of
+        ( Just top, _ ) ->
+            if mapFun top == query then
+                OnTop top
+
+            else
+                case maybeBottom of
+                    Just bottom ->
+                        Dual top bottom
+
+                    Nothing ->
+                        JustTop top
+
+        ( Nothing, Just bottom ) ->
+            JustBottom bottom
+
+        ( Nothing, Nothing ) ->
+            Unbounded
+
+
+type MakeSpaceResult data
+    = Available (Array (Split data))
+    | MovedOne (Array (Split data))
+    | CouldntOverride
+
+
+makeSpaceFor : Posix -> Posix -> (data -> Bool) -> Array (Split data) -> MakeSpaceResult data
+makeSpaceFor start end canOverrideCheck array =
+    let
+        preCleanArray =
+            array
+                |> Array.Extra.removeWhen
+                    (isBetweenAndSafeToOverride start end canOverrideCheck)
+
+        leftBetween =
+            preCleanArray
+                |> sliceBetween start end
+    in
+    case leftBetween of
+        [] ->
+            preCleanArray
+                |> Available
+
+        ( i, justTheOneSplit ) :: [] ->
+            preCleanArray
+                |> Array.set i (setSplitPosix end justTheOneSplit)
+                |> MovedOne
+
+        _ ->
+            CouldntOverride
 
 
 consolidateEmpty : Array (Split data) -> Array (Split data)
@@ -252,7 +347,8 @@ setSplitPosix posix split =
 
 isBetweenAndSafeToOverride : Posix -> Posix -> (data -> Bool) -> Split data -> Bool
 isBetweenAndSafeToOverride start end dataIsUseless split =
-    splitIsBetween (Time.posixToMillis start) (Time.posixToMillis end) split
+    splitIsBetween (posixToMillis start) (posixToMillis end) split
+        && (PXE.diff (toPosix split) end /= 0)
         && isSafeToOverride dataIsUseless split
 
 
@@ -273,8 +369,8 @@ sliceBetween from to arr =
         |> List.filter
             (\( _, split ) ->
                 splitIsBetween
-                    (Time.posixToMillis from)
-                    (Time.posixToMillis to)
+                    (posixToMillis from)
+                    (posixToMillis to)
                     split
             )
 
@@ -284,10 +380,10 @@ splitIsBetween from to split =
     let
         posix =
             split
-                |> unwrapPosix
-                |> Time.posixToMillis
+                |> toPosix
+                |> posixToMillis
     in
-    from < posix && posix < to
+    from < posix && posix <= to
 
 
 reSort : Array (Split data) -> Array (Split data)
@@ -302,11 +398,11 @@ getPosixAt : Int -> Array (Split data) -> Maybe Posix
 getPosixAt i array =
     array
         |> Array.get i
-        |> Maybe.map unwrapPosix
+        |> Maybe.map toPosix
 
 
-unwrapPosix : Split data -> Posix
-unwrapPosix split =
+toPosix : Split data -> Posix
+toPosix split =
     case split of
         Stop posix ->
             posix
@@ -318,8 +414,8 @@ unwrapPosix split =
 sortFun : Split data -> Int
 sortFun split =
     split
-        |> unwrapPosix
-        |> Time.posixToMillis
+        |> toPosix
+        |> posixToMillis
 
 
 
@@ -378,7 +474,7 @@ arrayAsTuple2 a b =
 
 posixEncoder : Posix -> E.Value
 posixEncoder time =
-    E.int (Time.posixToMillis time)
+    E.int (posixToMillis time)
 
 
 posixDecoder : D.Decoder Posix

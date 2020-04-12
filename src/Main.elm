@@ -287,19 +287,6 @@ snapBy snap num =
     num - modBy snap num
 
 
-
--- snapToLogBoundary : Posix -> Posix -> Posix -> Posix
--- snapToLogBoundary upperBoundary lowerBoundary posix =
---     if PXE.diff upperBoundary posix > PXE.diff lowerBoundary posix then
---         lowerBoundary
---     else
---         upperBoundary
--- consolidateEmptyLogs : Model -> Model
--- consolidateEmptyLogs model =
---     model
---         |> updateLogs (Logs.consolidateEmpty model.logs)
-
-
 andCmd : Cmd Msg -> Model -> ( Model, Cmd Msg )
 andCmd cmd model =
     ( model, cmd )
@@ -351,7 +338,16 @@ addLogFromDrag : Model -> Model
 addLogFromDrag model =
     case model.newLogDrag of
         Dragging ( start, end ) ->
-            { model | logs = model.logs |> Timeline.add Log.empty start end (\l -> l.title == "") }
+            { model
+                | logs =
+                    model.logs
+                        |> Timeline.add
+                            Log.empty
+                            start
+                            end
+                            (\l -> l.title == "")
+                            (1000 * 60 * 60)
+            }
 
         DragInactive ->
             model
