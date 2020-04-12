@@ -18,6 +18,7 @@
             "elm/svg": "1.0.1",
             "elm/time": "1.0.0",
             "elm/url": "1.0.0",
+            "elm-community/array-extra": "2.1.0",
             "elm-community/list-extra": "8.2.3",
             "kuon/elm-string-normalize": "1.0.1",
             "pzp1997/assoc-list": "1.0.0",
