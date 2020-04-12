@@ -44,7 +44,7 @@ type alias Logs =
     Timeline Log
 
 
-type alias LogID =
+type alias LogIndex =
     Int
 
 
@@ -71,7 +71,7 @@ type alias ModelBackup =
 
 type Mode
     = Scrolling
-    | Edit LogID
+    | Edit LogIndex
 
 
 
@@ -142,11 +142,11 @@ type Msg
     | TickTime Posix
     | OnScroll Int
     | Splitting SplittingMsg Int
-    | ClickOnLog LogID
-    | InputTitle LogID String
-    | SetCategory LogID (Maybe Log.Category)
+    | ClickOnLog LogIndex
+    | InputTitle LogIndex String
+    | SetCategory LogIndex (Maybe Log.Category)
     | InputTitleKeyDown Int
-    | DeleteLog LogID
+    | DeleteLog LogIndex
     | Noop
 
 
@@ -210,19 +210,19 @@ update msg model =
         --     model
         --         |> updateMode Scrolling
         --         |> andBackupModel
-        ( ClickOnLog logID, Scrolling ) ->
-            ( { model | mode = Edit logID }
+        ( ClickOnLog index, Scrolling ) ->
+            ( { model | mode = Edit index }
             , Task.attempt (\_ -> Noop) (Dom.focus "editing-log")
             )
 
-        ( InputTitle logID text, _ ) ->
+        ( InputTitle index text, _ ) ->
             model
-                |> updateLog logID (\l -> { l | title = text })
+                |> updateLog index (\l -> { l | title = text })
                 |> andBackupModel
 
-        ( SetCategory logID category, _ ) ->
+        ( SetCategory index category, _ ) ->
             model
-                |> updateLog logID (\l -> { l | category = category })
+                |> updateLog index (\l -> { l | category = category })
                 |> andBackupModel
 
         ( InputTitleKeyDown key, _ ) ->
@@ -234,9 +234,9 @@ update msg model =
             else
                 ( model, Cmd.none )
 
-        ( DeleteLog logID, _ ) ->
+        ( DeleteLog index, _ ) ->
             model
-                |> updateLogs (Timeline.remove logID model.logs)
+                |> updateLogs (Timeline.remove index model.logs)
                 |> andBackupModel
 
         ( _, _ ) ->
@@ -329,25 +329,20 @@ updateLogs logs model =
     { model | logs = logs }
 
 
-updateLog : LogID -> (Log -> Log) -> Model -> Model
-updateLog logID updateFun model =
-    { model | logs = model.logs |> Timeline.update logID updateFun }
+updateLog : LogIndex -> (Log -> Log) -> Model -> Model
+updateLog index updateFun model =
+    { model | logs = model.logs |> Timeline.update index updateFun }
 
 
 addLogFromDrag : Model -> Model
 addLogFromDrag model =
     case model.newLogDrag of
         Dragging ( start, end ) ->
-            { model
-                | logs =
-                    model.logs
-                        |> Timeline.add
-                            Log.empty
-                            start
-                            end
-                            (\l -> l.title == "")
-                            (1000 * 60 * 60)
-            }
+            model
+                |> updateLogs
+                    (model.logs
+                        |> Timeline.add Log.empty start end (\l -> l.title == "") (1000 * 60 * 60)
+                    )
 
         DragInactive ->
             model
@@ -436,7 +431,7 @@ viewLogsList viewport zone logs =
         )
 
 
-viewLogPaint : Viewport -> Time.Zone -> LogID -> Maybe Log -> ( Posix, Posix ) -> Html Msg
+viewLogPaint : Viewport -> Time.Zone -> LogIndex -> Maybe Log -> ( Posix, Posix ) -> Html Msg
 viewLogPaint viewport zone index maybeLog ( top, bottom ) =
     let
         timespan =
@@ -513,7 +508,7 @@ viewLogTime zone posix =
 --     div [c "log__box"] []
 
 
-viewLogBox : LogID -> Log -> Html Msg
+viewLogBox : LogIndex -> Log -> Html Msg
 viewLogBox index log =
     div [ c "log__box" ]
         [ div [ c "log__category", noPropagation "mousedown" ]
@@ -623,8 +618,8 @@ viewDebugPosix labl zone posix =
 -- case config.mode of
 --     Scrolling ->
 --         viewLogSimple config log
---     Edit logID ->
---         if log.id == logID then
+--     Edit LogIndex ->
+--         if log.id == LogIndex then
 --             viewLogEdit config log
 --         else
 --             viewLogSimple config log
