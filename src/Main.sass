@@ -124,12 +124,15 @@ body
     width: $lh * 2
     height: 100%
     cursor: pointer
+    border-top-left-radius: $radius
+    border-bottom-left-radius: $radius
+    overflow: hidden
     div
       flex: 1
-      &:first-child
-        border-top-left-radius: $radius
-      &:last-child
-        border-bottom-left-radius: $radius
+      // &:first-child
+      //   border-top-left-radius: $radius
+      // &:last-child
+      //   border-bottom-left-radius: $radius
 
 
   &__title
@@ -150,7 +153,9 @@ body
     width: 100%
     border: 0
     font-family: inherit
-    font-size: inherit
+    font-size: 1.4rem
+    font-weight: lighter
+    letter-spacing: 0.75px
     background: transparent
     &:hover
       box-shadow: $hover-shadow
@@ -173,19 +178,27 @@ body
     border: solid 1px rgba(#000, 0.1)
     border-right: 0
     border-top: 0
-    background: transparent
+    background: rgba(#000, 0)
+    line-height: 0
     cursor: pointer
+    z-index: 100
     &:hover, &:active, &:focus
       background: rgba(#F00, 0.2)
-  &.log--60min .log__delete
-    height: 100%
-    border-bottom-right-radius: $radius
-    border-bottom-left-radius: 0
-    border-bottom: 0
 
 
-  &.log--30min .log__titleInput:not(:focus)
-    font-size: 0.5rem
+  &.log--60min
+    .log__delete
+      height: 100%
+      border-bottom-right-radius: $radius
+      border-bottom-left-radius: 0
+      border-bottom: 0
+
+    .log__titleInput
+      font-size: 0.9rem
+
+  &.log--30min
+    .log__titleInput
+      font-size: 0.7rem
 
 
   &--edit .log__box

@@ -486,15 +486,15 @@ heightStyle vp timespan =
 
 viewLogBoxSizeClass : Int -> H.Attribute Msg
 viewLogBoxSizeClass timespan =
-    if timespan < (1000 * 60 * 10) then
+    if timespan <= (1000 * 60 * 10) then
         -- 10min
         c "log--10min log--30min log--60min"
 
-    else if timespan < (1000 * 60 * 30) then
+    else if timespan <= (1000 * 60 * 30) then
         -- 30min
         c "log--30min log--60min"
 
-    else if timespan < (1000 * 60 * 60) then
+    else if timespan <= (1000 * 60 * 60) then
         -- 1 hour
         c "log--60min"
 
