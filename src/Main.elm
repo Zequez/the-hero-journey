@@ -15,8 +15,13 @@ import Ports
 import PosixExtra as PXE
 import Task exposing (Task)
 import Time exposing (Posix)
+import TimeLayer
+import TimePx as VP exposing (Ratio, Viewport)
 import Timeline exposing (Timeline)
-import Viewport as VP exposing (Viewport)
+
+
+
+-- import Viewport as VP exposing (Viewport)
 
 
 fi : String -> D.Decoder a -> D.Decoder a
@@ -54,6 +59,7 @@ type alias Model =
     , mode : Mode
     , currentTime : Posix
     , currentZone : Time.Zone
+    , scrollPosition : Int
     , viewport : Viewport
     , newLogDrag : DragStatus
     , snapMillis : Int
@@ -103,12 +109,11 @@ init localStorageData =
       , mode = Scrolling
       , currentTime = Time.millisToPosix 0
       , currentZone = Time.utc
+      , scrollPosition = 0
       , viewport =
-            { firstDate = Time.millisToPosix 1586401200000 -- 2020-04-09
-            , lastDate = Time.millisToPosix 1586660400000 -- 2020-04-12
-            , visibleTimespan = 1000 * 60 * 60 * 20
-            , scroll = 0
-            , height = 986
+            { from = Time.millisToPosix 1586401200000 -- 2020-04-09
+            , to = Time.millisToPosix 1586660400000 -- 2020-04-12
+            , ratio = VP.ratioFromScreen 986 (1000 * 60 * 60 * 20)
             }
       , newLogDrag = DragInactive
       , snapMillis = 1000 * 60 * 10
@@ -164,7 +169,11 @@ update msg model =
             { model | currentZone = zone, currentTime = posix }
                 |> updateViewport
                     -- Hardcoded nav height = 80
-                    (\v -> { v | height = round element.element.height - 80 })
+                    (\v ->
+                        { v
+                            | ratio = VP.ratioFromScreen (round element.element.height - 80) (1000 * 60 * 60 * 20)
+                        }
+                    )
                 |> setViewportBoundaries
                 |> andScrollViewportToNow
 
@@ -172,8 +181,7 @@ update msg model =
             ( { model | currentTime = posix }, Cmd.none )
 
         ( OnScroll scrollPos, _ ) ->
-            model
-                |> updateViewport (\v -> { v | scroll = scrollPos })
+            { model | scrollPosition = scrollPos }
                 -- |> andDebug (\m -> Debug.log "ReceivedScroll" scrollPos)
                 |> andCmd Cmd.none
 
@@ -263,12 +271,9 @@ updateDragStatus clientY model =
     else
         let
             posix =
-                clientY
-                    |> (+) model.viewport.scroll
-                    |> VP.pxToMillis model.viewport
-                    |> (+) (model.viewport.firstDate |> Time.posixToMillis)
-                    |> snapBy model.snapMillis
-                    |> Time.millisToPosix
+                (clientY + model.scrollPosition)
+                    |> VP.pxToPosixPosition model.viewport
+                    |> VP.snapBy model.snapMillis
         in
         { model
             | newLogDrag =
@@ -310,8 +315,8 @@ setViewportBoundaries model =
         |> updateViewport
             (\v ->
                 { v
-                    | firstDate = PXE.add model.currentTime -(1000 * 60 * 60 * 24 * 5)
-                    , lastDate = PXE.add model.currentTime (1000 * 60 * 60 * 24 * 5)
+                    | from = PXE.add model.currentTime -(1000 * 60 * 60 * 24 * 5)
+                    , to = PXE.add model.currentTime (1000 * 60 * 60 * 24 * 5)
                 }
             )
 
@@ -320,9 +325,11 @@ andScrollViewportToNow : Model -> ( Model, Cmd Msg )
 andScrollViewportToNow model =
     ( model
     , Ports.scrollViewportTo <|
-        VP.millisToPx
-            model.viewport
-            (PXE.diff model.viewport.firstDate (PXE.add model.currentTime (-1000 * 60 * 60 * 2)))
+        round <|
+            VP.deltaPosixToNum
+                model.viewport.ratio
+                model.viewport.from
+                (PXE.add model.currentTime (-1000 * 60 * 60 * 2))
     )
 
 
@@ -397,12 +404,12 @@ viewViewport viewport newLogDrag timeZone currentTime logs =
         ]
         [ div
             [ c "logs"
-            , style "height" (px (VP.fullHeight viewport))
+            , style "height" (VP.viewportHeightToPx viewport)
             ]
             [ lazy2 viewLogsList viewport logs
             , lazy3 viewTimelineSplits viewport timeZone logs
             , lazy2 viewLogGhost viewport newLogDrag
-            , lazy3 VP.viewTimeLayer viewport timeZone currentTime
+            , lazy3 TimeLayer.view viewport timeZone currentTime
             ]
         ]
 
@@ -418,7 +425,7 @@ viewLogGhost viewport dragStatus =
             div
                 [ c "log log--Ghost"
                 , topStyle viewport top
-                , style "height" <| VP.millisToPxFloat viewport (PXE.diff top bottom)
+                , style "height" <| VP.deltaPosixToPx viewport.ratio top bottom
                 ]
                 [ div [ c "log__box" ] [] ]
 
@@ -500,12 +507,12 @@ viewLogPaintLogd vp at timespan index log =
 
 topStyle : Viewport -> Posix -> H.Attribute Msg
 topStyle vp top =
-    style "top" <| VP.millisToPxFloat vp (Time.posixToMillis top - Time.posixToMillis vp.firstDate)
+    style "top" <| VP.deltaPosixToPx vp.ratio vp.from top
 
 
 heightStyle : Viewport -> Int -> H.Attribute Msg
 heightStyle vp timespan =
-    style "height" <| px (VP.millisToPx vp timespan)
+    style "height" <| VP.intToPx vp.ratio timespan
 
 
 viewLogBoxSizeClass : Int -> H.Attribute Msg
@@ -595,13 +602,13 @@ viewLogBoxCatSelect name maybeSelected category msg =
 
 
 viewDebug : Model -> Html Msg
-viewDebug ({ viewport, currentZone } as model) =
+viewDebug ({ viewport, scrollPosition, currentZone } as model) =
     div [ c "debug" ]
-        [ div [] [ text ("Scroll: " ++ String.fromInt viewport.scroll) ]
-        , viewDebugPosix "VP first date: " currentZone viewport.firstDate
-        , viewDebugPosix "VP start date: " currentZone (VP.startDate viewport)
-        , viewDebugPosix "VP end date: " currentZone (VP.endDate viewport)
-        , viewDebugPosix "VP last date: " currentZone viewport.lastDate
+        [ div [] [ text ("Scroll: " ++ String.fromInt scrollPosition) ]
+        , viewDebugPosix "VP from date: " currentZone viewport.from
+        , viewDebugPosix "VP visible start date: " currentZone (VP.pxToPosixPosition viewport scrollPosition)
+        , viewDebugPosix "VP visible end date: " currentZone (VP.pxToPosixPosition viewport scrollPosition)
+        , viewDebugPosix "VP to date: " currentZone viewport.to
         , case model.newLogDrag of
             Dragging ( first, second ) ->
                 div []
