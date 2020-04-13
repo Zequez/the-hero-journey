@@ -5,14 +5,19 @@ module Viewport exposing
     , fullHeight
     , hour
     , millisToPx
+    , millisToPxFloat
     , posixAddPx
     , posixToPx
+    , posixToPxFloat
     , pxPerDay
     , pxToMillis
     , pxToPosix
+    , repeatingGradient
     , startDate
     )
 
+import Html exposing (Attribute)
+import Html.Attributes exposing (style)
 import PosixExtra
 import Time exposing (Posix)
 
@@ -28,6 +33,29 @@ type alias Viewport =
 
 type alias RatioData a =
     { a | height : Int, visibleTimespan : Int }
+
+
+repeatingGradient : Viewport -> Time.Zone -> List (Attribute msg)
+repeatingGradient vp zone =
+    let
+        -- shift =
+        --     (((Time.toMinute zone vp.firstDate * (60 * 1000))
+        --         + (Time.toSecond zone vp.firstDate * 1000)
+        --         + Time.toMillis zone vp.firstDate
+        --      )
+        --         |> modBy (60 * 60 * 1000)
+        --     )
+        --         |> millisToPxFloat vp
+        size =
+            (60 * 60 * 1000)
+                |> millisToPxFloat vp
+    in
+    [ style
+        "background-image"
+        ("repeating-linear-gradient(180deg, rgba(0,0,0,0.1) 0 1px, transparent 0 " ++ size ++ ")")
+
+    -- , style "top" shift
+    ]
 
 
 startDate : Viewport -> Posix
@@ -53,6 +81,11 @@ millisToPx viewport millis =
     (millis * pxPerDay viewport) // day
 
 
+millisToPxFloat : RatioData a -> Int -> String
+millisToPxFloat viewport millis =
+    String.fromFloat (toFloat (millis * pxPerDay viewport) / toFloat day) ++ "px"
+
+
 pxToMillis : RatioData a -> Int -> Int
 pxToMillis viewport pixels =
     (pixels * day) // pxPerDay viewport
@@ -67,6 +100,12 @@ pxToPosix viewport pixels =
 posixAddPx : RatioData a -> Int -> Posix -> Posix
 posixAddPx viewport pixels posix =
     PosixExtra.add posix (pxToMillis viewport pixels)
+
+
+posixToPxFloat : RatioData a -> Posix -> String
+posixToPxFloat viewport posix =
+    Time.posixToMillis posix
+        |> millisToPxFloat viewport
 
 
 posixToPx : RatioData a -> Posix -> Int

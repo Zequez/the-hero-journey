@@ -81,7 +81,7 @@ addAutoExpand data point maxDuration array =
         Dual top bottom ->
             case top of
                 Stop topPosix ->
-                    if PXE.diff topPosix (toPosix bottom) < maxDuration then
+                    if PXE.diff topPosix (toPosix bottom) <= maxDuration then
                         array
                             |> Array.push (Logd topPosix data)
                             |> reSort
@@ -375,7 +375,14 @@ consolidateEmpty array =
                     )
                     (Array.toList array)
                 |> List.filterMap identity
-                |> (::) first
+                |> (\list ->
+                        case first of
+                            Stop _ ->
+                                list
+
+                            _ ->
+                                first :: list
+                   )
                 |> Array.fromList
 
         _ ->

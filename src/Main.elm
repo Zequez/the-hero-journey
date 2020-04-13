@@ -106,12 +106,12 @@ init localStorageData =
       , viewport =
             { firstDate = Time.millisToPosix 1586401200000 -- 2020-04-09
             , lastDate = Time.millisToPosix 1586660400000 -- 2020-04-12
-            , visibleTimespan = 1000 * 60 * 60 * 24
+            , visibleTimespan = 1000 * 60 * 60 * 12
             , scroll = 0
             , height = 986
             }
       , newLogDrag = DragInactive
-      , snapMillis = 1000 * 60 * 10 -- 10min
+      , snapMillis = 1000 * 60 * 15 -- 15min
       }
     , Task.attempt (Result.withDefault Noop) initialTask
     )
@@ -165,9 +165,6 @@ update msg model =
                 |> updateViewport
                     -- Hardcoded nav height = 80
                     (\v -> { v | height = round element.element.height - 80 })
-                |> andDebug (\m -> Debug.log "VP Height" m.viewport.height)
-                |> andDebug (\m -> Debug.log "Time" posix)
-                |> andDebug (\m -> Debug.log "Time" posix)
                 |> setViewportBoundaries
                 |> andScrollViewportToNow
 
@@ -388,8 +385,12 @@ viewViewport viewport newLogDrag timeZone logs =
         , onSplitProgress (newLogDrag /= DragInactive) Splitting
         , onSplitEnd (newLogDrag /= DragInactive) Splitting
         ]
-        [ div [ c "logs", style "height" (px (VP.fullHeight viewport)) ]
+        [ div
+            [ c "logs"
+            , style "height" (px (VP.fullHeight viewport))
+            ]
             [ lazy3 viewLogsList viewport timeZone logs
+            , div (c "viewport-gradient" :: VP.repeatingGradient viewport timeZone) []
             , case newLogDrag of
                 Dragging ( start, end ) ->
                     viewLogGhost viewport start end
@@ -408,8 +409,8 @@ viewLogGhost viewport start end =
     in
     div
         [ c "log log--Ghost"
-        , style "top" <| px (VP.posixToPx viewport top)
-        , style "height" <| px (VP.millisToPx viewport (PXE.diff top bottom))
+        , style "top" <| VP.posixToPxFloat viewport top
+        , style "height" <| VP.millisToPxFloat viewport (PXE.diff top bottom)
         ]
         [ div [ c "log__box" ] [] ]
 
@@ -417,7 +418,7 @@ viewLogGhost viewport start end =
 viewLogsList : Viewport -> Time.Zone -> Logs -> Html Msg
 viewLogsList viewport zone logs =
     Keyed.node "div"
-        [ c "logs" ]
+        []
         (logs
             |> Timeline.map
                 (\index log nextLog ->
