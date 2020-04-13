@@ -84,6 +84,8 @@ body
     user-select: none
 
   &-time-layer
+
+  &-time-marks
     position: absolute
     z-index: 0
     top: 0
@@ -101,7 +103,16 @@ body
     z-index: 100
     pointer-events: none
 
-
+.timeline-splits
+  &-split
+    position: absolute
+    left: 0
+    height: $lh
+    margin-top: -$lh / 2
+    width: $p*2.5
+    text-align: right
+    font-size: 0.8rem
+    color: $color-text-dim
 .test
   position: absolute
   top: 500px
@@ -121,15 +132,6 @@ body
   width: 100%
   padding: 2px $p*6 1px $p*3
   z-index: 2
-
-  &__time
-    position: absolute
-    top: -$lh / 2
-    left: 0
-    width: $p*2.5
-    text-align: right
-    font-size: 0.8rem
-    color: $color-text-dim
 
 
   &__box
@@ -152,10 +154,6 @@ body
     overflow: hidden
     div
       flex: 1
-      // &:first-child
-      //   border-top-left-radius: $radius
-      // &:last-child
-      //   border-bottom-left-radius: $radius
 
 
   &__title

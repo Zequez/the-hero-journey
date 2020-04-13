@@ -106,12 +106,12 @@ init localStorageData =
       , viewport =
             { firstDate = Time.millisToPosix 1586401200000 -- 2020-04-09
             , lastDate = Time.millisToPosix 1586660400000 -- 2020-04-12
-            , visibleTimespan = 1000 * 60 * 60 * 12
+            , visibleTimespan = 1000 * 60 * 60 * 20
             , scroll = 0
             , height = 986
             }
       , newLogDrag = DragInactive
-      , snapMillis = 1000 * 60 * 10 -- 15min
+      , snapMillis = 1000 * 60 * 10
       }
     , Task.attempt (Result.withDefault Noop) initialTask
     )
@@ -266,6 +266,7 @@ updateDragStatus clientY model =
                 clientY
                     |> (+) model.viewport.scroll
                     |> VP.pxToMillis model.viewport
+                    |> (+) (model.viewport.firstDate |> Time.posixToMillis)
                     |> snapBy model.snapMillis
                     |> Time.millisToPosix
         in
@@ -282,7 +283,15 @@ updateDragStatus clientY model =
 
 snapBy : Int -> Int -> Int
 snapBy snap num =
-    num - modBy snap num
+    let
+        snapDistance =
+            modBy snap num
+    in
+    if snapDistance < (snap // 2) then
+        num - snapDistance
+
+    else
+        num + (snap - snapDistance)
 
 
 andCmd : Cmd Msg -> Model -> ( Model, Cmd Msg )
@@ -390,15 +399,12 @@ viewViewport viewport newLogDrag timeZone currentTime logs =
             [ c "logs"
             , style "height" (px (VP.fullHeight viewport))
             ]
-            (lazy3 viewLogsList viewport timeZone logs
-                :: lazy2 viewLogGhost viewport newLogDrag
-                :: VP.viewTimeLayers viewport timeZone currentTime
-            )
+            [ lazy2 viewLogsList viewport logs
+            , lazy3 viewTimelineSplits viewport timeZone logs
+            , lazy2 viewLogGhost viewport newLogDrag
+            , lazy3 VP.viewTimeLayer viewport timeZone currentTime
+            ]
         ]
-
-
-
--- VP.viewTimeLayers viewport timeZone currentTime
 
 
 viewLogGhost : Viewport -> DragStatus -> Html Msg
@@ -411,7 +417,7 @@ viewLogGhost viewport dragStatus =
             in
             div
                 [ c "log log--Ghost"
-                , style "top" <| VP.posixToPxFloat viewport top
+                , topStyle viewport top
                 , style "height" <| VP.millisToPxFloat viewport (PXE.diff top bottom)
                 ]
                 [ div [ c "log__box" ] [] ]
@@ -420,20 +426,40 @@ viewLogGhost viewport dragStatus =
             div [] []
 
 
-viewLogsList : Viewport -> Time.Zone -> Logs -> Html Msg
-viewLogsList viewport zone logs =
+viewTimelineSplits : Viewport -> Time.Zone -> Logs -> Html Msg
+viewTimelineSplits vp timeZone logs =
+    Keyed.node "div"
+        [ c "timeline-splits" ]
+        (logs
+            |> Timeline.mapSplits (viewTimelineSplit vp timeZone)
+        )
+
+
+viewTimelineSplit : Viewport -> Time.Zone -> Posix -> ( String, Html Msg )
+viewTimelineSplit vp timeZone at =
+    ( at |> Time.posixToMillis |> String.fromInt
+    , div
+        [ c "timeline-splits-split"
+        , topStyle vp at
+        ]
+        [ text (PXE.toNormalTime timeZone at) ]
+    )
+
+
+viewLogsList : Viewport -> Logs -> Html Msg
+viewLogsList viewport logs =
     Keyed.node "div"
         []
         (logs
             |> Timeline.map
                 (\index log nextLog ->
-                    viewLogPaint viewport zone index log nextLog
+                    viewLogPaint viewport index log nextLog
                 )
         )
 
 
-viewLogPaint : Viewport -> Time.Zone -> LogIndex -> Maybe Log -> ( Posix, Posix ) -> ( String, Html Msg )
-viewLogPaint viewport zone index maybeLog ( top, bottom ) =
+viewLogPaint : Viewport -> LogIndex -> Maybe Log -> ( Posix, Posix ) -> ( String, Html Msg )
+viewLogPaint viewport index maybeLog ( top, bottom ) =
     let
         timespan =
             PXE.diff top bottom
@@ -446,47 +472,35 @@ viewLogPaint viewport zone index maybeLog ( top, bottom ) =
     case maybeLog of
         Nothing ->
             ( id
-            , viewLogPaintEmpty
-                viewport
-                zone
-                top
-                timespan
+            , viewLogPaintEmpty viewport top timespan
             )
 
         Just log ->
             ( id
-            , viewLogPaintLogd
-                viewport
-                zone
-                top
-                timespan
-                index
-                log
+            , viewLogPaintLogd viewport top timespan index log
             )
 
 
-viewLogPaintEmpty : Viewport -> Time.Zone -> Posix -> Int -> Html Msg
-viewLogPaintEmpty vp zone at timespan =
-    div [ c "log log--Empty", topStyle vp at, heightStyle vp timespan ]
-        [ viewLogTime zone at ]
+viewLogPaintEmpty : Viewport -> Posix -> Int -> Html Msg
+viewLogPaintEmpty vp at timespan =
+    div [ c "log log--Empty", topStyle vp at, heightStyle vp timespan ] []
 
 
-viewLogPaintLogd : Viewport -> Time.Zone -> Posix -> Int -> Int -> Log -> Html Msg
-viewLogPaintLogd vp zone at timespan index log =
+viewLogPaintLogd : Viewport -> Posix -> Int -> Int -> Log -> Html Msg
+viewLogPaintLogd vp at timespan index log =
     div
         [ c ("log log--" ++ Log.categoryToSlug log.category)
         , topStyle vp at
         , heightStyle vp timespan
         , viewLogBoxSizeClass timespan
         ]
-        [ viewLogTime zone at
-        , lazy2 viewLogBox index log
+        [ lazy2 viewLogBox index log
         ]
 
 
 topStyle : Viewport -> Posix -> H.Attribute Msg
 topStyle vp top =
-    style "top" <| px (VP.posixToPx vp top)
+    style "top" <| VP.millisToPxFloat vp (Time.posixToMillis top - Time.posixToMillis vp.firstDate)
 
 
 heightStyle : Viewport -> Int -> H.Attribute Msg
@@ -512,9 +526,10 @@ viewLogBoxSizeClass timespan =
         c ""
 
 
-viewLogTime : Time.Zone -> Posix -> Html Msg
-viewLogTime zone posix =
-    div [ c "log__time" ] [ text (PXE.toNormalTime zone posix) ]
+
+-- viewLogTime : Time.Zone -> Posix -> Html Msg
+-- viewLogTime zone posix =
+--     div [ c "log__time" ] [ text (PXE.toNormalTime zone posix) ]
 
 
 viewLogBox : LogIndex -> Log -> Html Msg

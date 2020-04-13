@@ -13,7 +13,7 @@ module Viewport exposing
     , pxToMillis
     , pxToPosix
     , startDate
-    , viewTimeLayers
+    , viewTimeLayer
     )
 
 import Html as H exposing (Attribute, Html, div)
@@ -39,39 +39,52 @@ type alias RatioData a =
 -- , style "top" shift
 
 
-viewTimeLayers : Viewport -> Time.Zone -> Time.Posix -> List (Html msg)
-viewTimeLayers vp zone time =
-    [ div
-        [ class "viewport-time-layer"
-        , repeatingGradient vp zone
+viewTimeLayer : Viewport -> Time.Zone -> Time.Posix -> Html msg
+viewTimeLayer vp zone time =
+    div [ class "viewport-time-layer" ]
+        [ div
+            (class "viewport-time-marks"
+                :: repeatingGradient vp zone
+            )
+            []
+        , div
+            [ class "viewport-time-now"
+            , style "top" (PXE.diff vp.firstDate time |> millisToPxFloat vp)
+            ]
+            []
         ]
-        []
-    , div
-        [ class "viewport-time-now"
-        , style "top" (PXE.diff vp.firstDate time |> millisToPxFloat vp)
-        ]
-        []
-    ]
 
 
-repeatingGradient : Viewport -> Time.Zone -> Attribute msg
+repeatingGradient : Viewport -> Time.Zone -> List (Attribute msg)
 repeatingGradient vp zone =
     let
-        -- shift =
-        --     (((Time.toMinute zone vp.firstDate * (60 * 1000))
-        --         + (Time.toSecond zone vp.firstDate * 1000)
-        --         + Time.toMillis zone vp.firstDate
-        --      )
-        --         |> modBy (60 * 60 * 1000)
-        --     )
-        --         |> millisToPxFloat vp
+        shift =
+            -(Time.toMinute zone vp.firstDate
+                * (60 * 1000)
+                + (Time.toSecond zone vp.firstDate * 1000)
+                + Time.toMillis zone vp.firstDate
+                |> modBy (60 * 60 * 1000)
+             )
+                |> millisToPxFloat vp
+
+        hourlyPx =
+            (60 * 60 * 1000) |> millisToPxFloat vp
+
+        _ =
+            Debug.log "Timelayer render"
+                { shift = shift
+                , hourlyPx = hourlyPx
+                }
+
         size =
             (60 * 60 * 1000)
                 |> millisToPxFloat vp
     in
-    style
+    [ style "top" shift
+    , style
         "background-image"
         ("repeating-linear-gradient(180deg, rgba(0,0,0,0.1) 0 1px, transparent 0 " ++ size ++ ")")
+    ]
 
 
 startDate : Viewport -> Posix

@@ -7,6 +7,7 @@ module Timeline exposing
     , empty
     , encoder
     , map
+    , mapSplits
     , remove
     , resize
     , set
@@ -220,6 +221,13 @@ map mapFun (Timeline array) =
                 mapFun index (splitToMaybe first) ( toPosix first, toPosix next )
             )
             shifted
+
+
+mapSplits : (Posix -> a) -> Timeline data -> List a
+mapSplits mapFun (Timeline array) =
+    array
+        |> Array.map (toPosix >> mapFun)
+        |> Array.toList
 
 
 splitToMaybe : Split data -> Maybe data
