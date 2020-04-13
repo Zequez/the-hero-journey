@@ -12,13 +12,13 @@ module Viewport exposing
     , pxPerDay
     , pxToMillis
     , pxToPosix
-    , repeatingGradient
     , startDate
+    , viewTimeLayers
     )
 
-import Html exposing (Attribute)
-import Html.Attributes exposing (style)
-import PosixExtra
+import Html as H exposing (Attribute, Html, div)
+import Html.Attributes exposing (class, style)
+import PosixExtra as PXE
 import Time exposing (Posix)
 
 
@@ -35,7 +35,26 @@ type alias RatioData a =
     { a | height : Int, visibleTimespan : Int }
 
 
-repeatingGradient : Viewport -> Time.Zone -> List (Attribute msg)
+
+-- , style "top" shift
+
+
+viewTimeLayers : Viewport -> Time.Zone -> Time.Posix -> List (Html msg)
+viewTimeLayers vp zone time =
+    [ div
+        [ class "viewport-time-layer"
+        , repeatingGradient vp zone
+        ]
+        []
+    , div
+        [ class "viewport-time-now"
+        , style "top" (PXE.diff vp.firstDate time |> millisToPxFloat vp)
+        ]
+        []
+    ]
+
+
+repeatingGradient : Viewport -> Time.Zone -> Attribute msg
 repeatingGradient vp zone =
     let
         -- shift =
@@ -50,12 +69,9 @@ repeatingGradient vp zone =
             (60 * 60 * 1000)
                 |> millisToPxFloat vp
     in
-    [ style
+    style
         "background-image"
         ("repeating-linear-gradient(180deg, rgba(0,0,0,0.1) 0 1px, transparent 0 " ++ size ++ ")")
-
-    -- , style "top" shift
-    ]
 
 
 startDate : Viewport -> Posix
@@ -72,7 +88,7 @@ endDate viewport =
 
 fullHeight : Viewport -> Int
 fullHeight viewport =
-    PosixExtra.diff viewport.firstDate viewport.lastDate
+    PXE.diff viewport.firstDate viewport.lastDate
         |> millisToPx viewport
 
 
@@ -99,7 +115,7 @@ pxToPosix viewport pixels =
 
 posixAddPx : RatioData a -> Int -> Posix -> Posix
 posixAddPx viewport pixels posix =
-    PosixExtra.add posix (pxToMillis viewport pixels)
+    PXE.add posix (pxToMillis viewport pixels)
 
 
 posixToPxFloat : RatioData a -> Posix -> String

@@ -111,7 +111,7 @@ init localStorageData =
             , height = 986
             }
       , newLogDrag = DragInactive
-      , snapMillis = 1000 * 60 * 15 -- 15min
+      , snapMillis = 1000 * 60 * 10 -- 15min
       }
     , Task.attempt (Result.withDefault Noop) initialTask
     )
@@ -313,7 +313,7 @@ andScrollViewportToNow model =
     , Ports.scrollViewportTo <|
         VP.millisToPx
             model.viewport
-            (PXE.diff model.viewport.firstDate model.currentTime)
+            (PXE.diff model.viewport.firstDate (PXE.add model.currentTime (-1000 * 60 * 60 * 2)))
     )
 
 
@@ -362,10 +362,11 @@ view model =
         [ div [ c "container", id "container" ]
             [ nav [ c "nav" ] []
             , main_ [ c "main" ]
-                [ lazy4 viewViewport
+                [ lazy5 viewViewport
                     model.viewport
                     model.newLogDrag
                     model.currentZone
+                    model.currentTime
                     model.logs
                 ]
             ]
@@ -374,8 +375,8 @@ view model =
     }
 
 
-viewViewport : Viewport -> DragStatus -> Time.Zone -> Logs -> Html Msg
-viewViewport viewport newLogDrag timeZone logs =
+viewViewport : Viewport -> DragStatus -> Time.Zone -> Posix -> Logs -> Html Msg
+viewViewport viewport newLogDrag timeZone currentTime logs =
     div
         [ c "viewport"
         , id "viewport"
@@ -389,30 +390,34 @@ viewViewport viewport newLogDrag timeZone logs =
             [ c "logs"
             , style "height" (px (VP.fullHeight viewport))
             ]
-            [ lazy3 viewLogsList viewport timeZone logs
-            , div (c "viewport-gradient" :: VP.repeatingGradient viewport timeZone) []
-            , case newLogDrag of
-                Dragging ( start, end ) ->
-                    viewLogGhost viewport start end
-
-                DragInactive ->
-                    div [] []
-            ]
+            (lazy3 viewLogsList viewport timeZone logs
+                :: lazy2 viewLogGhost viewport newLogDrag
+                :: VP.viewTimeLayers viewport timeZone currentTime
+            )
         ]
 
 
-viewLogGhost : Viewport -> Posix -> Posix -> Html Msg
-viewLogGhost viewport start end =
-    let
-        ( top, bottom ) =
-            PXE.sort2 ( start, end )
-    in
-    div
-        [ c "log log--Ghost"
-        , style "top" <| VP.posixToPxFloat viewport top
-        , style "height" <| VP.millisToPxFloat viewport (PXE.diff top bottom)
-        ]
-        [ div [ c "log__box" ] [] ]
+
+-- VP.viewTimeLayers viewport timeZone currentTime
+
+
+viewLogGhost : Viewport -> DragStatus -> Html Msg
+viewLogGhost viewport dragStatus =
+    case dragStatus of
+        Dragging ( start, end ) ->
+            let
+                ( top, bottom ) =
+                    PXE.sort2 ( start, end )
+            in
+            div
+                [ c "log log--Ghost"
+                , style "top" <| VP.posixToPxFloat viewport top
+                , style "height" <| VP.millisToPxFloat viewport (PXE.diff top bottom)
+                ]
+                [ div [ c "log__box" ] [] ]
+
+        DragInactive ->
+            div [] []
 
 
 viewLogsList : Viewport -> Time.Zone -> Logs -> Html Msg
