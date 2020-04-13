@@ -3,10 +3,11 @@ module Main exposing (main)
 import Browser exposing (Document)
 import Browser.Dom as Dom
 import Dict exposing (Dict)
-import Html as H exposing (Html, button, div, input, main_, nav, text)
-import Html.Attributes as Attr exposing (class, classList, id, style, value)
+import Html as H exposing (Html, button, div, input, main_, nav, span, text)
+import Html.Attributes as Attr exposing (class, classList, id, style, title, value)
 import Html.Events as Ev exposing (onClick, onInput, stopPropagationOn)
-import Html.Lazy exposing (lazy, lazy2, lazy3, lazy4)
+import Html.Keyed as Keyed
+import Html.Lazy exposing (lazy, lazy2, lazy3, lazy4, lazy5)
 import Json.Decode as D
 import Json.Encode as E
 import Log exposing (Log)
@@ -364,7 +365,6 @@ view model =
         [ div [ c "container", id "container" ]
             [ nav [ c "nav" ] []
             , main_ [ c "main" ]
-                -- [ lazy viewLogsList model
                 [ lazy4 viewViewport
                     model.viewport
                     model.newLogDrag
@@ -375,15 +375,6 @@ view model =
         , viewDebug model
         ]
     }
-
-
-
--- type alias LogRenderConfig =
---     { initialTime : Posix
---     , pixelsPerHour : Int
---     , timeZone : Time.Zone
---     , mode : Mode
---     }
 
 
 viewViewport : Viewport -> DragStatus -> Time.Zone -> Logs -> Html Msg
@@ -398,13 +389,13 @@ viewViewport viewport newLogDrag timeZone logs =
         , onSplitEnd (newLogDrag /= DragInactive) Splitting
         ]
         [ div [ c "logs", style "height" (px (VP.fullHeight viewport)) ]
-            [ case newLogDrag of
+            [ lazy3 viewLogsList viewport timeZone logs
+            , case newLogDrag of
                 Dragging ( start, end ) ->
                     viewLogGhost viewport start end
 
                 DragInactive ->
                     div [] []
-            , lazy3 viewLogsList viewport timeZone logs
             ]
         ]
 
@@ -425,48 +416,66 @@ viewLogGhost viewport start end =
 
 viewLogsList : Viewport -> Time.Zone -> Logs -> Html Msg
 viewLogsList viewport zone logs =
-    div [ c "logs" ]
+    Keyed.node "div"
+        [ c "logs" ]
         (logs
-            |> Timeline.map (\index log nextLog -> viewLogPaint viewport zone index log nextLog)
+            |> Timeline.map
+                (\index log nextLog ->
+                    viewLogPaint viewport zone index log nextLog
+                )
         )
 
 
-viewLogPaint : Viewport -> Time.Zone -> LogIndex -> Maybe Log -> ( Posix, Posix ) -> Html Msg
+viewLogPaint : Viewport -> Time.Zone -> LogIndex -> Maybe Log -> ( Posix, Posix ) -> ( String, Html Msg )
 viewLogPaint viewport zone index maybeLog ( top, bottom ) =
     let
         timespan =
             PXE.diff top bottom
+
+        id =
+            top
+                |> Time.posixToMillis
+                |> String.fromInt
     in
     case maybeLog of
         Nothing ->
-            div
-                [ c "log log--Empty"
-                , topStyle viewport top
-                , heightStyle viewport timespan
-                ]
-                [ viewLogTime zone top
-                ]
+            ( id
+            , viewLogPaintEmpty
+                viewport
+                zone
+                top
+                timespan
+            )
 
         Just log ->
-            div
-                [ c ("log log--" ++ Log.categoryToSlug log.category)
-                , topStyle viewport top
-                , heightStyle viewport timespan
-                , viewLogBoxSizeClass timespan
-                ]
-                [ viewLogTime zone top
-                , viewLogBox index log
+            ( id
+            , viewLogPaintLogd
+                viewport
+                zone
+                top
+                timespan
+                index
+                log
+            )
 
-                -- div
-                -- [ c "log__box"
-                -- -- , if log.category == Logs.Empty then
-                -- -- Ev.onMouseDown (TouchEmptyLog log.id)
-                -- -- , onSplitStart Splitting
-                -- --   else
-                -- --     onClickUnpropagated (DeleteLog log.id)
-                -- ]
-                -- []
-                ]
+
+viewLogPaintEmpty : Viewport -> Time.Zone -> Posix -> Int -> Html Msg
+viewLogPaintEmpty vp zone at timespan =
+    div [ c "log log--Empty", topStyle vp at, heightStyle vp timespan ]
+        [ viewLogTime zone at ]
+
+
+viewLogPaintLogd : Viewport -> Time.Zone -> Posix -> Int -> Int -> Log -> Html Msg
+viewLogPaintLogd vp zone at timespan index log =
+    div
+        [ c ("log log--" ++ Log.categoryToSlug log.category)
+        , topStyle vp at
+        , heightStyle vp timespan
+        , viewLogBoxSizeClass timespan
+        ]
+        [ viewLogTime zone at
+        , lazy2 viewLogBox index log
+        ]
 
 
 topStyle : Viewport -> Posix -> H.Attribute Msg
@@ -502,26 +511,19 @@ viewLogTime zone posix =
     div [ c "log__time" ] [ text (PXE.toNormalTime zone posix) ]
 
 
-
--- viewLogBoxEmpty : Log -> Html Msg
--- viewLogBoxEmpty log =
---     div [c "log__box"] []
-
-
 viewLogBox : LogIndex -> Log -> Html Msg
 viewLogBox index log =
     div [ c "log__box" ]
         [ div [ c "log__category", noPropagation "mousedown" ]
-            (if log.category == Nothing then
-                [ viewLogBoxCatSelect Log.SelfCare (SetCategory index)
-                , viewLogBoxCatSelect Log.Recreative (SetCategory index)
-                , viewLogBoxCatSelect Log.Creative (SetCategory index)
-                , viewLogBoxCatSelect Log.SelfGrowth (SetCategory index)
-                ]
+            [ viewLogBoxCatSelect "Self care" log.category Log.SelfCare (SetCategory index)
+            , viewLogBoxCatSelect "Re creative" log.category Log.Recreative (SetCategory index)
+            , viewLogBoxCatSelect "Creative" log.category Log.Creative (SetCategory index)
+            , viewLogBoxCatSelect "Self growth" log.category Log.SelfGrowth (SetCategory index)
+            ]
 
-             else
-                [ div [ onClick (SetCategory index Nothing) ] [] ]
-            )
+        --  else
+        --     [ div [ onClick (SetCategory index Nothing) ] [] ]
+        -- )
         , div
             [ c "log__title" ]
             [ input
@@ -543,13 +545,32 @@ viewLogBox index log =
         ]
 
 
-viewLogBoxCatSelect : Log.Category -> (Maybe Log.Category -> msg) -> Html msg
-viewLogBoxCatSelect category msg =
+viewLogBoxCatSelect : String -> Maybe Log.Category -> Log.Category -> (Maybe Log.Category -> msg) -> Html msg
+viewLogBoxCatSelect name maybeSelected category msg =
+    let
+        isSelected =
+            case maybeSelected of
+                Just selected ->
+                    selected == category
+
+                Nothing ->
+                    False
+    in
     div
-        [ c ("log__categorySelect--" ++ Log.categoryToSlug (Just category))
-        , onClick (msg (Just category))
+        [ c ("log__categorySelect log__categorySelect--" ++ Log.categoryToSlug (Just category))
+        , cx [ ( "log__categorySelect--selected", isSelected ) ]
+        , title name
+        , onClick
+            (msg
+                (if isSelected then
+                    Nothing
+
+                 else
+                    Just category
+                )
+            )
         ]
-        []
+        [ span [] [ text name ] ]
 
 
 viewDebug : Model -> Html Msg
@@ -577,99 +598,6 @@ viewDebugPosix labl zone posix =
     div []
         [ text (labl ++ PXE.toNormalDateTime zone posix)
         ]
-
-
-
--- type alias LogsRenderConfig a =
---     { a
---         | viewportMillis : Int
---         , viewportHeight : Int
---         , currentZone : Time.Zone
---         , logs : Logs
---         , mode : Mode
---     }
--- viewLogsList : LogsRenderConfig a -> Html Msg
--- viewLogsList { viewportHeight, viewportMillis, currentZone, logs, mode } =
---     let
---         allLogs =
---             sortedLogs logs
---     in
---     div [ c "logs" ]
---         (case allLogs of
---             firstLog :: restOfLogs ->
---                 let
---                     logRenderConfig : LogRenderConfig
---                     logRenderConfig =
---                         { initialTime = firstLog.at
---                         , pixelsPerHour = viewportHeight * (60 * 60 * 1000) // viewportMillis
---                         , timeZone = currentZone
---                         , mode = mode
---                         }
---                 in
---                 allLogs
---                     |> List.map (\log -> viewLog logRenderConfig log)
---                     |> List.map2 (\next vlog -> vlog next) restOfLogs
---             _ ->
---                 []
---         )
--- viewLog : LogRenderConfig -> Log -> Log -> Html Msg
--- viewLog config log nextLog =
---     viewLogPaint config log nextLog
--- case config.mode of
---     Scrolling ->
---         viewLogSimple config log
---     Edit LogIndex ->
---         if log.id == LogIndex then
---             viewLogEdit config log
---         else
---             viewLogSimple config log
--- viewLogPaint : LogRenderConfig -> Log -> Log -> Html Msg
--- viewLogPaint config log nextLog =
---     div
---         [ c ("log log__" ++ categoryToSlug log.category)
---         , style "top" <|
---             px (calculateTop config.initialTime log.at config.pixelsPerHour)
---         , style "height" <|
---             px (calculateHeight log.at nextLog.at config.pixelsPerHour)
---         ]
---         [ div
---             [ c "log__box"
---             , if log.category == Empty then
---                 -- Ev.onMouseDown (TouchEmptyLog log.id)
---                 onSplitStart Splitting
---               else
---                 onClickUnpropagated (DeleteLog log.id)
---             ]
---             []
---         ]
--- viewLogSimple : LogRenderConfig -> Log -> Html Msg
--- viewLogSimple config log =
---     div [ c ("log log__" ++ categoryToSlug log.category) ]
---         [ div
---             [ c "log__box"
---             , onClickUnpropagated (ClickOnLog log.id)
---             ]
---             [ text (posixToHourString config.timeZone log.at)
---             , text log.title
---             ]
---         ]
--- viewLogEdit : LogRenderConfig -> Log -> Html Msg
--- viewLogEdit config log =
---     div [ c "log log--edit" ]
---         [ div [ c "log__box", onClickUnpropagated Noop ]
---             [ input
---                 [ value log.title
---                 , Attr.id "editing-log"
---                 , onInput InputTitle
---                 , onKeyDown InputTitleKeyDown
---                 ]
---                 []
---             , button
---                 [ onClick (DeleteLog log.id)
---                 ]
---                 [ text "X" ]
---             ]
---         ]
 
 
 subscriptions : Model -> Sub Msg
@@ -771,10 +699,6 @@ viewportYDecoder decoder =
 onScroll : (Int -> msg) -> H.Attribute msg
 onScroll msg =
     Ev.on "scroll" (D.map msg (fi "target" (fi "scrollTop" D.int)))
-
-
-
--- (D.map D.int (D.field "scrollTop" D.int))
 
 
 onTouchStart : (TouchEvent -> msg) -> H.Attribute msg

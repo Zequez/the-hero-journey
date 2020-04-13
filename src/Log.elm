@@ -86,7 +86,7 @@ categoryToSlug maybeCategory =
                     "SelfGrowth"
 
         Nothing ->
-            ""
+            "Uncategorized"
 
 
 categoryDecoder : D.Decoder (Maybe Category)

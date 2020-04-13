@@ -10,6 +10,7 @@ $nav-height: $lh * 2 + $p * 2
 $color-text-primary: rgba(#000,.86)
 $color-text-greyed: rgba(#000,.50)
 $color-text-dim: rgba(#000, .25)
+$color-text-inverted: rgba(#fff, 0.7)
 
 $focus-shadow: inset 0 0 0 2px rgba($color-primary, 0.7)
 $hover-shadow: inset 0 0 0 2px rgba($color-primary, 0.2)
@@ -142,6 +143,7 @@ body
     height: 100%
     border-radius: 0 $radius $radius 0
     background: rgba(#000, 0.07)
+    transition: background-color 0.5s
 
   &__titleInput
     margin-left: $p/2
@@ -157,6 +159,7 @@ body
     font-weight: lighter
     letter-spacing: 0.75px
     background: transparent
+    transition: box-shadow 0.5s
     &:hover
       box-shadow: $hover-shadow
     &:focus
@@ -185,6 +188,34 @@ body
     &:hover, &:active, &:focus
       background: rgba(#F00, 0.2)
 
+  &__category
+    .log__categorySelect
+      position: relative
+      font-size: 0.7em
+      align-items: center
+      justify-content: center
+      text-align: center
+      color: $color-text-inverted
+      transition: flex-basis 0.5s
+      overflow: hidden
+    span
+      position: absolute
+      display: block
+      top: 50%
+      left: 50%
+      transform: translate(-50%, -50%)
+      transition: opacity 0.5s
+      opacity: 0
+    .log__categorySelect:hover
+      // flex-basis: 25%
+      span
+        opacity: 1
+    .log__categorySelect--selected
+      &, &.log__categorySelect:hover
+        flex-basis: 100%
+      span
+        opacity: 0
+
 
   &.log--60min
     .log__delete
@@ -195,6 +226,11 @@ body
 
     .log__titleInput
       font-size: 0.9rem
+
+    .log__categorySelect:hover
+      flex: 1
+      span
+        display: none
 
   &.log--30min
     .log__titleInput
@@ -214,8 +250,6 @@ body
 
   @each $name, $color in $logs-colors
     &.log--#{$name}
-      .log__category div
-        background-color: $color
       .log__title
         background-color: rgba($color, 0.25)
     .log__categorySelect--#{$name}
