@@ -60,6 +60,8 @@ type alias Model =
     , currentTime : Posix
     , currentZone : Time.Zone
     , scrollPosition : Int
+    , dayStartsAt : Int
+    , dayEndsAt : Int
     , viewport : Viewport
     , newLogDrag : DragStatus
     , snapMillis : Int
@@ -110,6 +112,8 @@ init localStorageData =
       , currentTime = Time.millisToPosix 0
       , currentZone = Time.utc
       , scrollPosition = 0
+      , dayStartsAt = 6
+      , dayEndsAt = 24
       , viewport =
             { from = Time.millisToPosix 1586401200000 -- 2020-04-09
             , to = Time.millisToPosix 1586660400000 -- 2020-04-12
@@ -171,11 +175,14 @@ update msg model =
                     -- Hardcoded nav height = 80
                     (\v ->
                         { v
-                            | ratio = VP.ratioFromScreen (round element.element.height - 80) (1000 * 60 * 60 * 20)
+                            | ratio =
+                                VP.ratioFromScreen
+                                    (round element.element.height - 80)
+                                    ((1000 * 60 * 60) * (model.dayEndsAt - model.dayStartsAt))
                         }
                     )
                 |> setViewportBoundaries
-                |> andScrollViewportToNow
+                |> andScrollViewportToToday
 
         ( TickTime posix, _ ) ->
             ( { model | currentTime = posix }, Cmd.none )
@@ -321,16 +328,29 @@ setViewportBoundaries model =
             )
 
 
-andScrollViewportToNow : Model -> ( Model, Cmd Msg )
-andScrollViewportToNow model =
+andScrollViewportToToday : Model -> ( Model, Cmd Msg )
+andScrollViewportToToday model =
     ( model
     , Ports.scrollViewportTo <|
         round <|
             VP.deltaPosixToNum
                 model.viewport.ratio
                 model.viewport.from
-                (PXE.add model.currentTime (-1000 * 60 * 60 * 2))
+                (beginningOfDay model.currentZone model.currentTime model.dayStartsAt)
     )
+
+
+beginningOfDay : Time.Zone -> Posix -> Int -> Posix
+beginningOfDay zone time startOfDay =
+    (Time.posixToMillis time
+        - (Time.toHour zone time * (60 * 60 * 1000))
+        - (Time.toMinute zone time * (60 * 1000))
+        - (Time.toSecond zone time * 1000)
+        - (Time.posixToMillis time |> modBy 1000)
+        + startOfDay
+        * (60 * 60 * 1000)
+    )
+        |> Time.millisToPosix
 
 
 updateMode : Mode -> Model -> Model
