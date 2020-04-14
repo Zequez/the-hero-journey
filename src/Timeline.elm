@@ -3,6 +3,7 @@ module Timeline exposing
     , Timeline
     , add
     , addAutoExpand
+    , consolidateZeroLengthStops
     , decoder
     , empty
     , encoder
@@ -194,7 +195,17 @@ resize i posix (Timeline array) =
     in
     case maybeSplit of
         Just split ->
-            if before > current && current < after then
+            if before <= current && current <= after then
+                array
+                    |> Array.set i (setSplitPosix posix split)
+                    |> Timeline
+
+            else if current == before then
+                array
+                    |> Array.set i (setSplitPosix posix split)
+                    |> Timeline
+
+            else if current == after then
                 array
                     |> Array.set i (setSplitPosix posix split)
                     |> Timeline
@@ -204,6 +215,32 @@ resize i posix (Timeline array) =
 
         Nothing ->
             Timeline array
+
+
+consolidateZeroLengthStops : Timeline data -> Timeline data
+consolidateZeroLengthStops (Timeline array) =
+    array
+        |> Array.toIndexedList
+        |> List.filterMap
+            (\( i, split ) ->
+                case split of
+                    Stop posix ->
+                        case Array.get (i + 1) array of
+                            Just nextSplit ->
+                                if toMillis nextSplit == Time.posixToMillis posix then
+                                    Nothing
+
+                                else
+                                    Just split
+
+                            _ ->
+                                Just split
+
+                    _ ->
+                        Just split
+            )
+        |> Array.fromList
+        |> Timeline
 
 
 map : (Int -> Maybe data -> ( Posix, Posix ) -> a) -> Timeline data -> List a
@@ -223,11 +260,12 @@ map mapFun (Timeline array) =
             shifted
 
 
-mapSplits : (Posix -> a) -> Timeline data -> List a
+mapSplits : (( Int, Posix ) -> a) -> Timeline data -> List a
 mapSplits mapFun (Timeline array) =
     array
-        |> Array.map (toPosix >> mapFun)
-        |> Array.toList
+        |> Array.map toPosix
+        |> Array.toIndexedList
+        |> List.map mapFun
 
 
 splitToMaybe : Split data -> Maybe data

@@ -5,9 +5,9 @@ import Browser.Dom as Dom
 import Dict exposing (Dict)
 import Html as H exposing (Html, button, div, input, main_, nav, span, text)
 import Html.Attributes as Attr exposing (class, classList, id, style, title, value)
-import Html.Events as Ev exposing (onClick, onInput, stopPropagationOn)
+import Html.Events as Ev exposing (onClick, onInput)
 import Html.Keyed as Keyed
-import Html.Lazy exposing (lazy, lazy2, lazy3, lazy4, lazy5)
+import Html.Lazy exposing (lazy, lazy2, lazy3, lazy4, lazy5, lazy6)
 import Json.Decode as D
 import Json.Encode as E
 import Log exposing (Log)
@@ -63,7 +63,8 @@ type alias Model =
     , dayStartsAt : Int
     , dayEndsAt : Int
     , viewport : Viewport
-    , newLogDrag : DragStatus
+    , logCreationDrag : DragStatus
+    , logResizeDrag : ResizeStatus
     , snapMillis : Int
     }
 
@@ -71,6 +72,11 @@ type alias Model =
 type DragStatus
     = DragInactive
     | Dragging ( Posix, Posix )
+
+
+type ResizeStatus
+    = ResizeInactive
+    | ResizeDragging LogIndex
 
 
 type alias ModelBackup =
@@ -119,7 +125,8 @@ init localStorageData =
             , to = Time.millisToPosix 1586660400000 -- 2020-04-12
             , ratio = VP.ratioFromScreen 986 (1000 * 60 * 60 * 20)
             }
-      , newLogDrag = DragInactive
+      , logCreationDrag = DragInactive
+      , logResizeDrag = ResizeInactive
       , snapMillis = 1000 * 60 * 10
       }
     , Task.attempt (Result.withDefault Noop) initialTask
@@ -151,7 +158,8 @@ type Msg
     = InitializationTask ( Dom.Element, Time.Zone, Posix )
     | TickTime Posix
     | OnScroll Int
-    | Splitting SplittingMsg Int
+    | CreatingLog DraggingMsg Int
+    | ResizingLog ResizeDragMsg
     | ClickOnLog LogIndex
     | InputTitle LogIndex String
     | SetCategory LogIndex (Maybe Log.Category)
@@ -160,10 +168,16 @@ type Msg
     | Noop
 
 
-type SplittingMsg
-    = SplitStart
-    | SplitProgress
-    | SplitEnd
+type DraggingMsg
+    = DragStart
+    | DragProgress
+    | DragEnd
+
+
+type ResizeDragMsg
+    = ResizeDragStart LogIndex
+    | ResizeDragProgress Int
+    | ResizeDragEnd
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -192,37 +206,53 @@ update msg model =
                 -- |> andDebug (\m -> Debug.log "ReceivedScroll" scrollPos)
                 |> andCmd Cmd.none
 
-        ( Splitting splitMsg posY, _ ) ->
-            let
-                _ =
-                    ""
-
-                --Debug.log "Split msg " posY
-            in
-            case ( splitMsg, model.newLogDrag ) of
-                ( SplitStart, DragInactive ) ->
-                    model
-                        |> updateDragStatus posY
+        ( CreatingLog dragMsg posY, _ ) ->
+            case ( dragMsg, model.logCreationDrag ) of
+                ( DragStart, DragInactive ) ->
+                    let
+                        posix =
+                            dragToPosix model posY
+                    in
+                    { model | logCreationDrag = Dragging ( posix, posix ) }
                         |> andCmd Cmd.none
 
-                ( SplitProgress, Dragging _ ) ->
-                    model
-                        |> updateDragStatus posY
+                ( DragProgress, Dragging ( from, _ ) ) ->
+                    { model | logCreationDrag = Dragging ( from, dragToPosix model posY ) }
                         |> andCmd Cmd.none
 
-                ( SplitEnd, Dragging _ ) ->
+                ( DragEnd, Dragging _ ) ->
                     model
                         |> addLogFromDrag
-                        |> updateDragStatus -1
+                        |> (\m -> { m | logCreationDrag = DragInactive })
                         |> andBackupModel
 
                 ( _, _ ) ->
                     ( model, Cmd.none )
 
-        -- ( ClickOnFreeSpace, Edit _ ) ->
-        --     model
-        --         |> updateMode Scrolling
-        --         |> andBackupModel
+        ( ResizingLog resizeMsg, _ ) ->
+            case ( resizeMsg, model.logResizeDrag ) of
+                ( ResizeDragStart index, ResizeInactive ) ->
+                    { model | logResizeDrag = ResizeDragging index }
+                        |> andCmd Cmd.none
+
+                ( ResizeDragProgress posY, ResizeDragging index ) ->
+                    { model
+                        | logs =
+                            model.logs
+                                |> Timeline.resize index (dragToPosix model posY)
+                    }
+                        |> andCmd Cmd.none
+
+                ( ResizeDragEnd, ResizeDragging _ ) ->
+                    { model
+                        | logResizeDrag = ResizeInactive
+                        , logs = Timeline.consolidateZeroLengthStops model.logs
+                    }
+                        |> andBackupModel
+
+                ( _, _ ) ->
+                    ( model, Cmd.none )
+
         ( ClickOnLog index, Scrolling ) ->
             ( { model | mode = Edit index }
             , Task.attempt (\_ -> Noop) (Dom.focus "editing-log")
@@ -270,27 +300,41 @@ andBackupModel model =
     ( model, Ports.backupToLocalStorage (E.encode 0 (modelEncode model)) )
 
 
-updateDragStatus : Int -> Model -> Model
-updateDragStatus clientY model =
-    if clientY == -1 then
-        { model | newLogDrag = DragInactive }
 
-    else
-        let
-            posix =
-                (clientY + model.scrollPosition)
-                    |> VP.pxToPosixPosition model.viewport
-                    |> VP.snapBy model.snapMillis
-        in
-        { model
-            | newLogDrag =
-                case model.newLogDrag of
-                    DragInactive ->
-                        Dragging ( posix, posix )
+-- updateLogResizeDrag : Maybe Int -> Model -> Model
+-- updateLogResizeDrag maybeClientY model =
+--     { model | logResizeDrag = updateDragStatus model maybeClientY model.logResizeDrag }
 
-                    Dragging ( first, second ) ->
-                        Dragging ( first, posix )
-        }
+
+updateLogCreationDrag : Maybe Int -> Model -> Model
+updateLogCreationDrag maybeClientY model =
+    { model | logCreationDrag = updateDragStatus model maybeClientY model.logCreationDrag }
+
+
+updateDragStatus : Model -> Maybe Int -> DragStatus -> DragStatus
+updateDragStatus model maybeClientY dragStatus =
+    case maybeClientY of
+        Nothing ->
+            DragInactive
+
+        Just clientY ->
+            let
+                posix =
+                    dragToPosix model clientY
+            in
+            case dragStatus of
+                DragInactive ->
+                    Dragging ( posix, posix )
+
+                Dragging ( first, _ ) ->
+                    Dragging ( first, posix )
+
+
+dragToPosix : Model -> Int -> Posix
+dragToPosix model clientY =
+    (clientY + model.scrollPosition)
+        |> VP.pxToPosixPosition model.viewport
+        |> VP.snapBy model.snapMillis
 
 
 snapBy : Int -> Int -> Int
@@ -370,7 +414,7 @@ updateLog index updateFun model =
 
 addLogFromDrag : Model -> Model
 addLogFromDrag model =
-    case model.newLogDrag of
+    case model.logCreationDrag of
         Dragging ( start, end ) ->
             model
                 |> updateLogs
@@ -398,9 +442,10 @@ view model =
         [ div [ c "container", id "container" ]
             [ nav [ c "nav" ] []
             , main_ [ c "main" ]
-                [ lazy5 viewViewport
+                [ lazy6 viewViewport
                     model.viewport
-                    model.newLogDrag
+                    model.logCreationDrag
+                    model.logResizeDrag
                     model.currentZone
                     model.currentTime
                     model.logs
@@ -411,16 +456,28 @@ view model =
     }
 
 
-viewViewport : Viewport -> DragStatus -> Time.Zone -> Posix -> Logs -> Html Msg
-viewViewport viewport newLogDrag timeZone currentTime logs =
+viewViewport : Viewport -> DragStatus -> ResizeStatus -> Time.Zone -> Posix -> Logs -> Html Msg
+viewViewport viewport logCreationDrag logResizeStatus timeZone currentTime logs =
+    let
+        isDraggingCreation =
+            logCreationDrag /= DragInactive
+
+        isDraggingResize =
+            logResizeStatus /= ResizeInactive
+
+        isDraggingAnything =
+            isDraggingCreation || isDraggingResize
+    in
     div
         [ c "viewport"
         , id "viewport"
-        , cx [ ( "viewport--dragging", newLogDrag /= DragInactive ) ]
+        , cx [ ( "viewport--dragging", isDraggingAnything ) ]
         , onScroll OnScroll
-        , onSplitStart Splitting
-        , onSplitProgress (newLogDrag /= DragInactive) Splitting
-        , onSplitEnd (newLogDrag /= DragInactive) Splitting
+        , onDragStart (CreatingLog DragStart)
+        , ifAttr isDraggingCreation (onDragProgress (CreatingLog DragProgress))
+        , ifAttr isDraggingCreation (onDragEnd (CreatingLog DragEnd))
+        , ifAttr isDraggingResize (onDragProgress (\i -> ResizingLog (ResizeDragProgress i)))
+        , ifAttr isDraggingResize (onDragEnd (\_ -> ResizingLog ResizeDragEnd))
         ]
         [ div
             [ c "logs"
@@ -428,7 +485,7 @@ viewViewport viewport newLogDrag timeZone currentTime logs =
             ]
             [ lazy2 viewLogsList viewport logs
             , lazy3 viewTimelineSplits viewport timeZone logs
-            , lazy2 viewLogGhost viewport newLogDrag
+            , lazy2 viewLogGhost viewport logCreationDrag
             , lazy3 TimeLayer.view viewport timeZone currentTime
             ]
         ]
@@ -457,20 +514,30 @@ viewTimelineSplits : Viewport -> Time.Zone -> Logs -> Html Msg
 viewTimelineSplits vp timeZone logs =
     Keyed.node "div"
         [ c "timeline-splits" ]
-        (logs
-            |> Timeline.mapSplits (viewTimelineSplit vp timeZone)
-        )
+        (logs |> Timeline.mapSplits (viewTimelineSplit vp timeZone))
 
 
-viewTimelineSplit : Viewport -> Time.Zone -> Posix -> ( String, Html Msg )
-viewTimelineSplit vp timeZone at =
+viewTimelineSplit : Viewport -> Time.Zone -> ( LogIndex, Posix ) -> ( String, Html Msg )
+viewTimelineSplit vp timeZone ( index, at ) =
     ( at |> Time.posixToMillis |> String.fromInt
     , div
         [ c "timeline-splits-split"
         , topStyle vp at
         ]
-        [ text (PXE.toNormalTime timeZone at) ]
+        [ div [ c "timeline-splits-split-hour" ]
+            [ text (PXE.toNormalTime timeZone at) ]
+        , div
+            [ c "timeline-splits-split-move"
+            , noPropagation "mousedown"
+            , onDragStart (\i -> ResizingLog (ResizeDragStart index))
+            ]
+            []
+        ]
     )
+
+
+
+-- viewResizeHandle : Viewport
 
 
 viewLogsList : Viewport -> Logs -> Html Msg
@@ -629,7 +696,7 @@ viewDebug ({ viewport, scrollPosition, currentZone } as model) =
         , viewDebugPosix "VP visible start date: " currentZone (VP.pxToPosixPosition viewport scrollPosition)
         , viewDebugPosix "VP visible end date: " currentZone (VP.pxToPosixPosition viewport scrollPosition)
         , viewDebugPosix "VP to date: " currentZone viewport.to
-        , case model.newLogDrag of
+        , case model.logCreationDrag of
             Dragging ( first, second ) ->
                 div []
                     [ viewDebugPosix "Drag From: " currentZone first
@@ -684,13 +751,13 @@ sumPosix time add =
 
 onClickUnpropagated : msg -> H.Attribute msg
 onClickUnpropagated msg =
-    stopPropagationOn "click"
-        (D.map (\m -> ( m, True )) (D.succeed msg))
+    Ev.stopPropagationOn "click" <|
+        D.map (\m -> ( m, True )) (D.succeed msg)
 
 
 noPropagation : String -> H.Attribute Msg
 noPropagation event =
-    stopPropagationOn event (D.map (\m -> ( m, True )) (D.succeed Noop))
+    Ev.stopPropagationOn event (D.map (\m -> ( m, True )) (D.succeed Noop))
 
 
 onKeyDown : (Int -> msg) -> H.Attribute msg
@@ -698,31 +765,32 @@ onKeyDown tagger =
     Ev.on "keydown" (D.map tagger Ev.keyCode)
 
 
-onSplitStart : (SplittingMsg -> Int -> msg) -> H.Attribute msg
-onSplitStart msg =
-    Ev.on "mousedown" <|
-        D.map (msg SplitStart)
-            (fi "clientY" D.int)
+onDragStart : (Int -> msg) -> H.Attribute msg
+onDragStart msg =
+    Ev.stopPropagationOn "mousedown"
+        (D.map (\clientY -> ( msg clientY, True )) (fi "clientY" D.int))
 
 
 
+-- onDragStartRaw : msg -> H.Attribute msg
+-- onDragStartRaw msg =
+--     Ev.stopPropagationOn "mousedown"
+--         (D.map (\m -> ( m, True )) (D.succeed msg))
 -- loggingDecoder <|
 --     D.map (msg SplitStart) (fi "offsetY" D.int)
 
 
-onSplitProgress : Bool -> (SplittingMsg -> Int -> msg) -> H.Attribute msg
-onSplitProgress splitting msg =
+onDragProgress : (Int -> msg) -> H.Attribute msg
+onDragProgress msg =
     Ev.on "mousemove" <|
-        rejectDecoderIf (not splitting) <|
-            loggingDecoder <|
-                D.map (msg SplitProgress) (fi "clientY" D.int)
+        loggingDecoder <|
+            D.map msg (fi "clientY" D.int)
 
 
-onSplitEnd : Bool -> (SplittingMsg -> Int -> msg) -> H.Attribute msg
-onSplitEnd splitting msg =
+onDragEnd : (Int -> msg) -> H.Attribute msg
+onDragEnd msg =
     Ev.on "mouseup" <|
-        rejectDecoderIf (not splitting) <|
-            D.map (msg SplitEnd) (fi "clientY" D.int)
+        D.map msg (fi "clientY" D.int)
 
 
 rejectDecoderIf : Bool -> D.Decoder msg -> D.Decoder msg
@@ -788,6 +856,15 @@ loggingDecoder realDecoder =
                             |> Debug.log "decoding error"
                             |> D.fail
             )
+
+
+ifAttr : Bool -> H.Attribute msg -> H.Attribute msg
+ifAttr condition attribute =
+    if condition then
+        attribute
+
+    else
+        c ""
 
 
 
