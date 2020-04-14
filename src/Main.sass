@@ -38,6 +38,9 @@ input, button, div
   &:focus, &:active
     outline: none
 
+h2
+  margin: 0
+
 body
   line-height: $lh
   font-family: "Helvetica Neue", Helvetica, Arial, sans-serif
@@ -73,6 +76,35 @@ $pages: 2
     left: 0
     width: 100%
     height: 100%
+    &-title
+      font-size: 3rem
+      line-height: $lh*3
+      font-weight: lighter
+      margin-bottom: $p
+
+.config-page
+  padding: $p
+  button
+    width: 100%
+    line-height: $lh
+    padding: ($p - 1) 0
+    margin-bottom: $p
+    font-size: 1.2rem
+    border-radius: $radius
+    background-color: $color-primary
+    border: solid 1px $color-primary
+      bottom: none
+    box-shadow: inset 0 -3px 0 rgba(#000, 0.25), inset 0 1px 0 rgba(#fff, 0.1)
+    text-shadow: 0 1px 0 rgba(#000, 0.25)
+    color: $color-text-inverted
+    cursor: pointer
+    &:focus, &:hover
+      background-color: lighten($color-primary, 7.5%)
+    &:active
+      box-shadow: none
+      background-color: darken($color-primary, 5%)
+      text-shadow: none
+
 
 
 

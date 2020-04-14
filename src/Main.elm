@@ -181,6 +181,7 @@ type Msg
     | TickTime Posix
     | OnScroll Int
     | SetPage Page
+    | DownloadBackup
     | CreatingLog DraggingMsg Int
     | ResizingLog ResizeDragMsg
     | ClickOnLog LogIndex
@@ -226,6 +227,9 @@ update msg model =
 
         ( SetPage page, _ ) ->
             ( { model | page = page }, Cmd.none )
+
+        ( DownloadBackup, _ ) ->
+            ( model, Ports.downloadBackup () )
 
         ( OnScroll scrollPos, _ ) ->
             { model | scrollPosition = scrollPos }
@@ -476,7 +480,8 @@ view model =
                 , viewConfigPage model
                 ]
             ]
-        , viewDebug model
+
+        -- , viewDebug model
         ]
     }
 
@@ -516,7 +521,11 @@ viewLogsPage model =
 
 viewConfigPage : Model -> Html Msg
 viewConfigPage model =
-    div [ c "page config-page" ] [ text "Yo! Config!" ]
+    div [ c "page config-page" ]
+        [ H.h2 [ c "page-title" ] [ text "Configuration" ]
+        , button [ onClick DownloadBackup ] [ text "Download data backup" ]
+        , button [] [ text "Backup to cloud" ]
+        ]
 
 
 viewViewport : Viewport -> DragStatus -> ResizeStatus -> Time.Zone -> Posix -> Logs -> Html Msg
