@@ -42,6 +42,7 @@ body
   line-height: $lh
   font-family: "Helvetica Neue", Helvetica, Arial, sans-serif
   background-color: $background-color
+  overflow-x: hidden
 
 
 .container
@@ -49,30 +50,63 @@ body
   flex-direction: column-reverse
 
 
-.main
+$pages: 2
+.pages
   position: absolute
   top: 0
   left: 0
   right: 0
   bottom: $nav-height
+  transition: transform 0.5s
 
 
-.debug
-  position: absolute
-  top: 0
-  left: 0
-  z-index: 100
-  padding: $p/2
-  pointer-events: none
-  color: white
-  font-size: 0.75rem
-  background: rgba(#000, 0.3)
-  border-bottom-right-radius: $radius
+  @for $i from 1 through $pages
+    &.pages-active-#{$i}
+      transform: translateX(#{-100% * ($i - 1)})
+
+    .page:nth-child(#{$i})
+      transform: translateX(100% * ($i - 1))
+
+  .page
+    position: absolute
+    top: 0
+    left: 0
+    width: 100%
+    height: 100%
+
 
 
 .nav
+  position: relative
+  display: flex
   height: $nav-height
   background: $color-primary
+  &-underline
+    position: absolute
+    width: 100% / $pages
+    height: 8px
+    background: rgba(#000, 0.2)
+    bottom: 0
+    left: 0
+    transition: transform 0.5s
+  &-item
+    flex: 1 0 50%
+    text-align: center
+    line-height: $nav-height
+    letter-spacing: 1px
+    font-weight: lighter
+    font-size: 1.2rem
+    color: rgba(#fff, 0.6)
+    cursor: pointer
+    transition: transform 0.5s
+  &-item-active
+    color: rgba(#fff, 1)
+    font-weight: normal
+    transform: translateY(-3px)
+
+    @for $i from 1 through $pages
+      &:nth-child(#{$i}) ~ .nav-underline
+        transform: translateX(#{100% * ($i - 1)})
 
 
 .viewport
@@ -306,3 +340,21 @@ body
   &--Uncategorized
   &--Empty .log__box
     opacity: 0.25
+
+
+
+
+
+/******************************/
+
+.debug
+  position: absolute
+  top: 0
+  left: 0
+  z-index: 100
+  padding: $p/2
+  pointer-events: none
+  color: white
+  font-size: 0.75rem
+  background: rgba(#000, 0.3)
+  border-bottom-right-radius: $radius

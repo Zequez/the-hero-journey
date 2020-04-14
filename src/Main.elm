@@ -57,6 +57,7 @@ type alias LogIndex =
 type alias Model =
     { logs : Logs
     , mode : Mode
+    , page : Page
     , currentTime : Posix
     , currentZone : Time.Zone
     , scrollPosition : Int
@@ -67,6 +68,11 @@ type alias Model =
     , logResizeDrag : ResizeStatus
     , snapMillis : Int
     }
+
+
+type Page
+    = LogsPage
+    | ConfigPage
 
 
 type DragStatus
@@ -115,6 +121,7 @@ init localStorageData =
     in
     ( { logs = initialLogs
       , mode = Scrolling
+      , page = LogsPage
       , currentTime = Time.millisToPosix 0
       , currentZone = Time.utc
       , scrollPosition = 0
@@ -145,6 +152,21 @@ initialTask =
             )
 
 
+main : Program D.Value Model Msg
+main =
+    Browser.document
+        { init = \localStorageData -> init localStorageData
+        , view = view
+        , update = update
+        , subscriptions = subscriptions
+        }
+
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    Time.every (1000 * 60) TickTime
+
+
 
 ---------------------------- ██╗   ██╗██████╗ ██████╗  █████╗ ████████╗███████╗
 ---------------------------- ██║   ██║██╔══██╗██╔══██╗██╔══██╗╚══██╔══╝██╔════╝
@@ -158,6 +180,7 @@ type Msg
     = InitializationTask ( Dom.Element, Time.Zone, Posix )
     | TickTime Posix
     | OnScroll Int
+    | SetPage Page
     | CreatingLog DraggingMsg Int
     | ResizingLog ResizeDragMsg
     | ClickOnLog LogIndex
@@ -200,6 +223,9 @@ update msg model =
 
         ( TickTime posix, _ ) ->
             ( { model | currentTime = posix }, Cmd.none )
+
+        ( SetPage page, _ ) ->
+            ( { model | page = page }, Cmd.none )
 
         ( OnScroll scrollPos, _ ) ->
             { model | scrollPosition = scrollPos }
@@ -440,20 +466,57 @@ view model =
     { title = "The Hero Journey: The Story Of Your Life"
     , body =
         [ div [ c "container", id "container" ]
-            [ nav [ c "nav" ] []
-            , main_ [ c "main" ]
-                [ lazy6 viewViewport
-                    model.viewport
-                    model.logCreationDrag
-                    model.logResizeDrag
-                    model.currentZone
-                    model.currentTime
-                    model.logs
+            [ nav [ c "nav" ]
+                [ viewNavItem model.page LogsPage "LOGS"
+                , viewNavItem model.page ConfigPage "CONFIG"
+                , div [ c "nav-underline" ] []
+                ]
+            , main_ [ c ("pages pages-active-" ++ pageIndex model.page) ]
+                [ viewLogsPage model
+                , viewConfigPage model
                 ]
             ]
         , viewDebug model
         ]
     }
+
+
+pageIndex : Page -> String
+pageIndex page =
+    case page of
+        LogsPage ->
+            "1"
+
+        ConfigPage ->
+            "2"
+
+
+viewNavItem : Page -> Page -> String -> Html Msg
+viewNavItem current to navLabel =
+    div
+        [ c "nav-item"
+        , cx [ ( "nav-item-active", current == to ) ]
+        , onClick (SetPage to)
+        ]
+        [ text navLabel ]
+
+
+viewLogsPage : Model -> Html Msg
+viewLogsPage model =
+    div [ c "page logs-page" ]
+        [ lazy6 viewViewport
+            model.viewport
+            model.logCreationDrag
+            model.logResizeDrag
+            model.currentZone
+            model.currentTime
+            model.logs
+        ]
+
+
+viewConfigPage : Model -> Html Msg
+viewConfigPage model =
+    div [ c "page config-page" ] [ text "Yo! Config!" ]
 
 
 viewViewport : Viewport -> DragStatus -> ResizeStatus -> Time.Zone -> Posix -> Logs -> Html Msg
@@ -469,7 +532,7 @@ viewViewport viewport logCreationDrag logResizeStatus timeZone currentTime logs 
             isDraggingCreation || isDraggingResize
     in
     div
-        [ c "viewport"
+        [ c "viewport page"
         , id "viewport"
         , cx [ ( "viewport--dragging", isDraggingAnything ) ]
         , onScroll OnScroll
@@ -713,21 +776,6 @@ viewDebugPosix labl zone posix =
     div []
         [ text (labl ++ PXE.toNormalDateTime zone posix)
         ]
-
-
-subscriptions : Model -> Sub Msg
-subscriptions model =
-    Time.every 1000 TickTime
-
-
-main : Program D.Value Model Msg
-main =
-    Browser.document
-        { init = \localStorageData -> init localStorageData
-        , view = view
-        , update = update
-        , subscriptions = \_ -> Sub.none
-        }
 
 
 
