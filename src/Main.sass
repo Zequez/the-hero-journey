@@ -38,14 +38,15 @@ input, button, div
   &:focus, &:active
     outline: none
 
-h2
-  margin: 0
-
 body
+  position: fixed
+  width: 100%
+  font-size: 16px
   line-height: $lh
   font-family: "Helvetica Neue", Helvetica, Arial, sans-serif
   background-color: $background-color
   overflow-x: hidden
+
 
 
 .container
@@ -76,19 +77,31 @@ $pages: 2
     left: 0
     width: 100%
     height: 100%
-    &-title
-      font-size: 3rem
-      line-height: $lh*3
-      font-weight: lighter
-      margin-bottom: $p
 
-.config-page
-  padding: $p
+
+.form
+  h2, h3, input, button, p
+    margin: $p 0
+    font-weight: lighter
+  h2, h3
+    margin-bottom: 0
+  h2
+    font-size: 3rem
+    line-height: $lh*3
+  h3
+    font-size: 2rem
+    line-height: $lh*2
+  p
+    letter-spacing: 0.5px
+    font-weight: 300
+
+  .center
+    text-align: center
+
   button
     width: 100%
     line-height: $lh
     padding: ($p - 1) 0
-    margin-bottom: $p
     font-size: 1.2rem
     border-radius: $radius
     background-color: $color-primary
@@ -104,6 +117,28 @@ $pages: 2
       box-shadow: none
       background-color: darken($color-primary, 5%)
       text-shadow: none
+    &:disabled
+      filter: saturate(0.1)
+
+  $input-box-shadow: inset 0 0 2px rgba(#000, 0.5)
+  input
+    width: 100%
+    height: $lh*2
+    padding: $p
+    border: 0
+    font-size: 1.2rem
+    border-radius: $radius
+    box-shadow: inset 0 0 2px rgba(#000, 0.5)
+    &:disabled
+      box-shadow: inset 0 0 1px rgba(#000, 0.5)
+      color: $color-text-greyed
+    &:focus
+      box-shadow: $input-box-shadow, inset 0 0 0 2px rgba($color-primary,1)
+
+
+.config-page
+  padding: $p
+
 
 
 
@@ -189,16 +224,16 @@ $pages: 2
     &-move
       position: absolute
       left: 50%
-      top: -6px
+      top: -4px
       width: $p*3
-      height: 14px
+      height: 8px
       margin-left: -$p*3
-      line-height: 12px
+      line-height: 6px
       text-align: center
       font-weight: lighter
       color: rgba(#000, 0.4)
       background: #e8e8e8
-      border-radius: 3px
+      border-radius: 2px
       box-shadow: $move-handle-shadow
       cursor: ns-resize
       &:before

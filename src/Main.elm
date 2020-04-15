@@ -1,5 +1,6 @@
 module Main exposing (main)
 
+import Backend
 import Browser exposing (Document)
 import Browser.Dom as Dom
 import Dict exposing (Dict)
@@ -9,6 +10,7 @@ import Html.Events as Ev exposing (onClick, onInput)
 import Html.Keyed as Keyed
 import Html.Lazy exposing (lazy, lazy2, lazy3, lazy4, lazy5, lazy6)
 import Json.Decode as D
+import Json.Decode.Pipeline as DP
 import Json.Encode as E
 import Log exposing (Log)
 import Ports
@@ -18,6 +20,8 @@ import Time exposing (Posix)
 import TimeLayer
 import TimePx as VP exposing (Ratio, Viewport)
 import Timeline exposing (Timeline)
+import Timeline2
+import Validate exposing (Validator)
 
 
 
@@ -37,6 +41,10 @@ cx =
     classList
 
 
+emptyLog =
+    Log.empty
+
+
 
 ------------------------------------ ████████╗██╗   ██╗██████╗ ███████╗███████╗
 ------------------------------------ ╚══██╔══╝╚██╗ ██╔╝██╔══██╗██╔════╝██╔════╝
@@ -47,7 +55,7 @@ cx =
 
 
 type alias Logs =
-    Timeline Log
+    Timeline
 
 
 type alias LogIndex =
@@ -55,9 +63,14 @@ type alias LogIndex =
 
 
 type alias Model =
-    { logs : Logs
+    { page : Page
+
+    -- Config page
+    , authStatus : AuthStatus
+
+    -- Logs page
     , mode : Mode
-    , page : Page
+    , logs : Logs
     , currentTime : Posix
     , currentZone : Time.Zone
     , scrollPosition : Int
@@ -108,20 +121,33 @@ type Mode
 -- }
 
 
+type AuthStatus
+    = Unauthenticated
+    | WaitingForConfirmation
+    | Authenticated String
+
+
 init : D.Value -> ( Model, Cmd Msg )
 init localStorageData =
     let
-        initialLogs =
-            case D.decodeValue modelDecode localStorageData of
-                Ok modelBackup ->
-                    modelBackup.logs
+        modelBackup =
+            case D.decodeValue (D.null ()) localStorageData of
+                Ok _ ->
+                    ModelBackup Timeline.empty
 
-                Err errorMsg ->
-                    Debug.log (D.errorToString errorMsg) Timeline.empty
+                Err _ ->
+                    case D.decodeValue modelDecode localStorageData of
+                        Ok data ->
+                            data
+
+                        Err errorMsg ->
+                            -- Debug.log (D.errorToString errorMsg) Timeline.empty
+                            Debug.todo (D.errorToString errorMsg)
     in
-    ( { logs = initialLogs
+    ( { page = LogsPage
+      , authStatus = Unauthenticated
       , mode = Scrolling
-      , page = LogsPage
+      , logs = Debug.log "Logs" modelBackup.logs
       , currentTime = Time.millisToPosix 0
       , currentZone = Time.utc
       , scrollPosition = 0
@@ -164,7 +190,12 @@ main =
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
-    Time.every (1000 * 60) TickTime
+    Sub.batch
+        [ Time.every (1000 * 60) TickTime
+        , Backend.signInInfo (D.decodeValue Backend.userDataDecoder >> LoggedInData)
+        , Backend.signInError (D.decodeValue Backend.logInErrorDecoder >> LoggedInError)
+        , Backend.receiveLogs (D.decodeValue Backend.logsListDecoder >> LogsReceived)
+        ]
 
 
 
@@ -182,6 +213,14 @@ type Msg
     | OnScroll Int
     | SetPage Page
     | DownloadBackup
+      --
+    | SignIn
+    | SignOut
+    | SaveLog Log
+    | LoggedInData (Result D.Error Backend.UserData)
+    | LoggedInError (Result D.Error Backend.ErrorData)
+    | LogsReceived (Result D.Error (List Log))
+      --
     | CreatingLog DraggingMsg Int
     | ResizingLog ResizeDragMsg
     | ClickOnLog LogIndex
@@ -230,6 +269,15 @@ update msg model =
 
         ( DownloadBackup, _ ) ->
             ( model, Ports.downloadBackup () )
+
+        ( SignIn, _ ) ->
+            ( { model | authStatus = WaitingForConfirmation }, Backend.signIn () )
+
+        ( SignOut, _ ) ->
+            ( { model | authStatus = Unauthenticated }, Backend.signOut () )
+
+        ( SaveLog log, _ ) ->
+            ( model, Backend.saveLog (Log.encoder log) )
 
         ( OnScroll scrollPos, _ ) ->
             { model | scrollPosition = scrollPos }
@@ -327,7 +375,12 @@ andDebug fun model =
 
 andBackupModel : Model -> ( Model, Cmd Msg )
 andBackupModel model =
-    ( model, Ports.backupToLocalStorage (E.encode 0 (modelEncode model)) )
+    ( model, backupCmd model )
+
+
+backupCmd : Model -> Cmd Msg
+backupCmd model =
+    Ports.backupToLocalStorage (E.encode 0 (modelEncode model))
 
 
 
@@ -446,10 +499,14 @@ addLogFromDrag : Model -> Model
 addLogFromDrag model =
     case model.logCreationDrag of
         Dragging ( start, end ) ->
+            let
+                ( sortedStart, sortedEnd ) =
+                    PXE.sort2 ( start, end )
+            in
             model
                 |> updateLogs
                     (model.logs
-                        |> Timeline.add Log.empty start end (\l -> l.title == "") (1000 * 60 * 60)
+                        |> Timeline.add { emptyLog | at = sortedStart } sortedEnd (\l -> l.title == "") (1000 * 60 * 60)
                     )
 
         DragInactive ->
@@ -521,10 +578,11 @@ viewLogsPage model =
 
 viewConfigPage : Model -> Html Msg
 viewConfigPage model =
-    div [ c "page config-page" ]
-        [ H.h2 [ c "page-title" ] [ text "Configuration" ]
+    div [ c "page config-page form" ]
+        [ H.h2 [] [ text "Configuration" ]
         , button [ onClick DownloadBackup ] [ text "Download data backup" ]
-        , button [] [ text "Backup to cloud" ]
+        , H.h3 [] [ text "Cloud backup" ]
+        , button [ onClick SignIn ] [ text "Sign up" ]
         ]
 
 
@@ -935,9 +993,12 @@ ifAttr condition attribute =
 
 modelEncode : Model -> E.Value
 modelEncode model =
-    E.object [ ( "logs", Timeline.encoder Log.encoder model.logs ) ]
+    E.object
+        [ ( "logs", Timeline.encoder Log.encoder model.logs )
+        ]
 
 
 modelDecode : D.Decoder ModelBackup
 modelDecode =
-    D.map ModelBackup (fi "logs" (Timeline.decoder Log.decoder))
+    D.map ModelBackup
+        (fi "logs" (Timeline.decoder Log.decoder))

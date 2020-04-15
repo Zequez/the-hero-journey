@@ -1,6 +1,5 @@
 module Timeline exposing
-    ( Split(..)
-    , Timeline
+    ( Timeline
     , add
     , addAutoExpand
     , consolidateZeroLengthStops
@@ -17,48 +16,50 @@ module Timeline exposing
 
 import Array exposing (Array)
 import Array.Extra
+import Dict exposing (Dict)
 import Json.Decode as D
 import Json.Encode as E
+import Log exposing (Log)
 import PosixExtra as PXE
 import Time exposing (Posix, posixToMillis)
 
 
-type Timeline data
-    = Timeline (Array (Split data))
+type Timeline
+    = Timeline (Array Log)
 
 
-type Split data
-    = Stop Posix
-    | Logd Posix data
+
+-- type Log
+--     = Stop Posix
+--     | Logd Posix data
 
 
-empty : Timeline data
+empty : Timeline
 empty =
     Timeline Array.empty
 
 
-add : data -> Posix -> Posix -> (data -> Bool) -> Int -> Timeline data -> Timeline data
-add data unsortedStart unsortedEnd canOverrideCheck autoExpandMax (Timeline array) =
-    if PXE.diff unsortedStart unsortedEnd == 0 then
-        addAutoExpand data unsortedStart autoExpandMax array
+add : Log -> Posix -> (Log -> Bool) -> Int -> Timeline -> Timeline
+add log end canOverrideCheck autoExpandMax (Timeline array) =
+    if PXE.diff log.at end == 0 then
+        addAutoExpand log autoExpandMax array
             |> Timeline
 
+    else if PXE.diff log.at end < 0 then
+        Timeline array
+
     else
-        let
-            ( start, end ) =
-                PXE.sort2 ( unsortedStart, unsortedEnd )
-        in
-        case makeSpaceFor start end canOverrideCheck array of
+        case makeSpaceFor log.at end canOverrideCheck array of
             Available newArray ->
                 newArray
-                    |> Array.push (Logd start data)
-                    |> Array.push (Stop end)
+                    |> Array.push log
+                    |> Array.push { log | at = end, visible = False }
                     |> reSort
                     |> Timeline
 
             EndstopExists newArray ->
                 newArray
-                    |> Array.push (Logd start data)
+                    |> Array.push log
                     |> reSort
                     |> Timeline
 
@@ -67,99 +68,88 @@ add data unsortedStart unsortedEnd canOverrideCheck autoExpandMax (Timeline arra
                     |> Timeline
 
 
-addAutoExpand : data -> Posix -> Int -> Array (Split data) -> Array (Split data)
-addAutoExpand data point maxDuration array =
+addAutoExpand : Log -> Int -> Array Log -> Array Log
+addAutoExpand data maxDuration array =
     -- What a beautiful piece of machinery!
-    case findBoundariesBy (posixToMillis point) (toPosix >> posixToMillis) array of
+    case findBoundariesBy (posixToMillis data.at) (toPosix >> posixToMillis) array of
         OnTop _ ->
             array
 
         Unbounded ->
             array
-                |> Array.push (Logd point data)
-                |> Array.push (Stop (PXE.add point maxDuration))
+                |> Array.push data
+                |> Array.push { data | at = PXE.add data.at maxDuration, visible = False }
                 |> reSort
 
         Dual top bottom ->
-            case top of
-                Stop topPosix ->
-                    if PXE.diff topPosix (toPosix bottom) <= maxDuration then
+            case top.visible of
+                False ->
+                    if PXE.diff top.at bottom.at <= maxDuration then
                         array
-                            |> Array.push (Logd topPosix data)
+                            |> Array.push { data | at = top.at }
                             |> reSort
 
                     else
                         array
-                            |> Array.push (Logd topPosix data)
-                            |> Array.push (Stop (PXE.add topPosix maxDuration))
+                            |> Array.push { data | at = top.at }
+                            |> Array.push { data | at = PXE.add top.at maxDuration, visible = False }
                             |> reSort
 
-                Logd _ _ ->
+                True ->
                     array
 
         JustBottom bottom ->
-            if PXE.diff point (toPosix bottom) < maxDuration then
+            if PXE.diff data.at bottom.at < maxDuration then
                 array
-                    |> Array.push (Logd point data)
+                    |> Array.push data
                     |> reSort
 
             else
                 array
-                    |> Array.push (Logd point data)
-                    |> Array.push (Stop (PXE.add point maxDuration))
+                    |> Array.push data
+                    |> Array.push { data | at = PXE.add data.at maxDuration, visible = False }
                     |> reSort
 
-        JustTop _ ->
-            array
-                |> Array.push (Logd point data)
-                |> Array.push (Stop (PXE.add point maxDuration))
-                |> reSort
+        JustTop top ->
+            if PXE.diff top.at data.at < maxDuration then
+                array
+                    |> Array.push { data | at = top.at }
+                    |> Array.push { data | at = PXE.add top.at maxDuration, visible = False }
+                    |> reSort
+
+            else
+                array
+                    |> Array.push data
+                    |> Array.push { data | at = PXE.add data.at maxDuration, visible = False }
+                    |> reSort
 
 
-set : Int -> data -> Timeline data -> Timeline data
+set : Int -> Log -> Timeline -> Timeline
 set i log (Timeline array) =
-    let
-        maybePosix =
-            getPosixAt i array
-    in
-    case maybePosix of
-        Just posix ->
-            array
-                |> Array.set i (Logd posix log)
-                |> Timeline
+    case Array.get i array of
+        Just _ ->
+            array |> Array.set i log |> Timeline
 
         Nothing ->
             Timeline array
 
 
-update : Int -> (data -> data) -> Timeline data -> Timeline data
+update : Int -> (Log -> Log) -> Timeline -> Timeline
 update i updateFun (Timeline array) =
-    let
-        maybeSplit =
-            array
-                |> Array.get i
-    in
-    case maybeSplit of
+    case Array.get i array of
         Just split ->
-            case split of
-                Logd posix data ->
-                    array
-                        |> Array.set i (Logd posix (updateFun data))
-                        |> Timeline
-
-                Stop _ ->
-                    Timeline array
+            array |> Array.set i (updateFun split) |> Timeline
 
         Nothing ->
             Timeline array
 
 
-remove : Int -> Timeline data -> Timeline data
+remove : Int -> Timeline -> Timeline
 remove i (Timeline array) =
     case Array.get i array of
-        Just (Logd posix _) ->
+        Just split ->
             array
-                |> Array.set i (Stop posix)
+                |> Array.set i { split | visible = False }
                 |> consolidateEmpty
                 |> Timeline
 
@@ -167,7 +157,7 @@ remove i (Timeline array) =
             Timeline array
 
 
-resize : Int -> Posix -> Timeline data -> Timeline data
+resize : Int -> Posix -> Timeline -> Timeline
 resize i posix (Timeline array) =
     let
         before =
@@ -217,17 +207,17 @@ resize i posix (Timeline array) =
             Timeline array
 
 
-consolidateZeroLengthStops : Timeline data -> Timeline data
+consolidateZeroLengthStops : Timeline -> Timeline
 consolidateZeroLengthStops (Timeline array) =
     array
         |> Array.toIndexedList
         |> List.filterMap
             (\( i, split ) ->
-                case split of
-                    Stop posix ->
+                case split.visible of
+                    False ->
                         case Array.get (i + 1) array of
                             Just nextSplit ->
-                                if toMillis nextSplit == Time.posixToMillis posix then
+                                if toMillis nextSplit == Time.posixToMillis split.at then
                                     Nothing
 
                                 else
@@ -236,14 +226,14 @@ consolidateZeroLengthStops (Timeline array) =
                             _ ->
                                 Just split
 
-                    _ ->
+                    True ->
                         Just split
             )
         |> Array.fromList
         |> Timeline
 
 
-map : (Int -> Maybe data -> ( Posix, Posix ) -> a) -> Timeline data -> List a
+map : (Int -> Maybe Log -> ( Posix, Posix ) -> a) -> Timeline -> List a
 map mapFun (Timeline array) =
     let
         shifted =
@@ -260,7 +250,7 @@ map mapFun (Timeline array) =
             shifted
 
 
-mapSplits : (( Int, Posix ) -> a) -> Timeline data -> List a
+mapSplits : (( Int, Posix ) -> a) -> Timeline -> List a
 mapSplits mapFun (Timeline array) =
     array
         |> Array.map toPosix
@@ -268,14 +258,13 @@ mapSplits mapFun (Timeline array) =
         |> List.map mapFun
 
 
-splitToMaybe : Split data -> Maybe data
+splitToMaybe : Log -> Maybe Log
 splitToMaybe split =
-    case split of
-        Stop _ ->
-            Nothing
+    if split.visible == True then
+        Just split
 
-        Logd _ data ->
-            Just data
+    else
+        Nothing
 
 
 
@@ -327,12 +316,12 @@ findBoundariesBy query mapFun list =
 
 
 type MakeSpaceResult data
-    = Available (Array (Split data))
-    | EndstopExists (Array (Split data))
+    = Available (Array Log)
+    | EndstopExists (Array Log)
     | CouldntOverride
 
 
-makeSpaceFor : Posix -> Posix -> (data -> Bool) -> Array (Split data) -> MakeSpaceResult data
+makeSpaceFor : Posix -> Posix -> (Log -> Bool) -> Array Log -> MakeSpaceResult data
 makeSpaceFor start end canOverrideCheck array =
     let
         slice =
@@ -358,7 +347,7 @@ makeSpaceFor start end canOverrideCheck array =
                 CouldntOverride
 
 
-tryToDeleteEverythingBetween : Posix -> Posix -> (data -> Bool) -> Array (Split data) -> Array (Split data)
+tryToDeleteEverythingBetween : Posix -> Posix -> (Log -> Bool) -> Array Log -> Array Log
 tryToDeleteEverythingBetween start end canOverrideCheck array =
     let
         top =
@@ -371,19 +360,19 @@ tryToDeleteEverythingBetween start end canOverrideCheck array =
         |> Array.Extra.removeWhen
             (\split ->
                 if toMillis split >= top && toMillis split < bottom then
-                    case split of
-                        Stop _ ->
+                    case split.visible of
+                        False ->
                             True
 
-                        Logd _ log ->
-                            canOverrideCheck log
+                        True ->
+                            canOverrideCheck split
 
                 else
                     False
             )
 
 
-sliceBetween : Posix -> Posix -> Bool -> Array (Split data) -> List ( Int, Split data )
+sliceBetween : Posix -> Posix -> Bool -> Array Log -> List ( Int, Log )
 sliceBetween start end includeLast arr =
     let
         top =
@@ -405,15 +394,15 @@ sliceBetween start end includeLast arr =
             )
 
 
-consolidateEmpty : Array (Split data) -> Array (Split data)
+consolidateEmpty : Array Log -> Array Log
 consolidateEmpty array =
     case Array.toList array of
         first :: tail ->
             tail
                 |> List.map2
                     (\prevSplit split ->
-                        case ( prevSplit, split ) of
-                            ( Stop _, Stop _ ) ->
+                        case ( prevSplit.visible, split.visible ) of
+                            ( False, False ) ->
                                 Nothing
 
                             _ ->
@@ -422,11 +411,11 @@ consolidateEmpty array =
                     (Array.toList array)
                 |> List.filterMap identity
                 |> (\list ->
-                        case first of
-                            Stop _ ->
+                        case first.visible of
+                            False ->
                                 list
 
-                            _ ->
+                            True ->
                                 first :: list
                    )
                 |> Array.fromList
@@ -435,7 +424,7 @@ consolidateEmpty array =
             array
 
 
-reSort : Array (Split data) -> Array (Split data)
+reSort : Array Log -> Array Log
 reSort array =
     array
         |> Array.toList
@@ -443,39 +432,29 @@ reSort array =
         |> Array.fromList
 
 
-setSplitPosix : Posix -> Split data -> Split data
+setSplitPosix : Posix -> Log -> Log
 setSplitPosix posix split =
-    case split of
-        Stop _ ->
-            Stop posix
-
-        Logd _ log ->
-            Logd posix log
+    { split | at = posix }
 
 
-getPosixAt : Int -> Array (Split data) -> Maybe Posix
+getPosixAt : Int -> Array Log -> Maybe Posix
 getPosixAt i array =
     array
         |> Array.get i
         |> Maybe.map toPosix
 
 
-toPosix : Split data -> Posix
+toPosix : Log -> Posix
 toPosix split =
-    case split of
-        Stop posix ->
-            posix
-
-        Logd posix _ ->
-            posix
+    split.at
 
 
-toMillis : Split data -> Int
+toMillis : Log -> Int
 toMillis =
     toPosix >> Time.posixToMillis
 
 
-sortFun : Split data -> Int
+sortFun : Log -> Int
 sortFun split =
     split
         |> toPosix
@@ -491,39 +470,39 @@ sortFun split =
 -- ╚══════╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝╚══════╝
 
 
-encoder : (data -> E.Value) -> Timeline data -> E.Value
+encoder : (Log -> E.Value) -> Timeline -> E.Value
 encoder dataEncoder (Timeline array) =
-    E.list (splitEncoder dataEncoder) (Array.toList array)
+    E.list dataEncoder (Array.toList array)
 
 
-splitEncoder : (data -> E.Value) -> Split data -> E.Value
-splitEncoder dataEncoder split =
-    case split of
-        Stop posix ->
-            E.list identity [ posixEncoder posix, E.null ]
 
-        Logd posix data ->
-            E.list identity [ posixEncoder posix, dataEncoder data ]
+-- splitEncoder : (data -> E.Value) -> Log -> E.Value
+-- splitEncoder dataEncoder split =
+--     case split of
+--         Stop posix ->
+--             E.list identity [ posixEncoder posix, E.null ]
+--         Logd posix data ->
+--             E.list identity [ posixEncoder posix, dataEncoder data ]
 
 
-decoder : D.Decoder data -> D.Decoder (Timeline data)
+decoder : D.Decoder Log -> D.Decoder Timeline
 decoder dataDecoder =
-    D.list (splitDecoder dataDecoder)
+    D.list dataDecoder
         |> D.map (\list -> Timeline (Array.fromList list))
 
 
-splitDecoder : D.Decoder data -> D.Decoder (Split data)
-splitDecoder dataDecoder =
-    arrayAsTuple2 posixDecoder (D.nullable dataDecoder)
-        |> D.andThen
-            (\tuple ->
-                case tuple of
-                    ( posix, Nothing ) ->
-                        D.succeed (Stop posix)
 
-                    ( posix, Just data ) ->
-                        D.succeed (Logd posix data)
-            )
+-- splitDecoder : D.Decoder data -> D.Decoder (Log)
+-- splitDecoder dataDecoder =
+--     arrayAsTuple2 posixDecoder (D.nullable dataDecoder)
+--         |> D.andThen
+--             (\tuple ->
+--                 case tuple of
+--                     ( posix, Nothing ) ->
+--                         D.succeed (Stop posix)
+--                     ( posix, Just data ) ->
+--                         D.succeed (Logd posix data)
+--             )
 
 
 arrayAsTuple2 : D.Decoder a -> D.Decoder b -> D.Decoder ( a, b )
