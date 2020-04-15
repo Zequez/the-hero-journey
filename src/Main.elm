@@ -20,7 +20,6 @@ import Time exposing (Posix)
 import TimeLayer
 import TimePx as VP exposing (Ratio, Viewport)
 import Timeline exposing (Timeline)
-import Timeline2
 import Validate exposing (Validator)
 
 
